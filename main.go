@@ -28,7 +28,7 @@ import (
 type config struct {
 	port, script, stateFile, statusFile, pauseFile string
 	baud                                           int
-	absence, debounce, stale                       time.Duration
+	absence, debounce, stale, alertAfter           time.Duration
 	maxDistance                                    uint
 	dryRun, verbose                                bool
 	replay                                         string
@@ -53,6 +53,7 @@ func main() {
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
+	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
 	flag.Parse()
 	log.SetFlags(0)
@@ -81,6 +82,8 @@ func main() {
 		lastFrame   Frame
 		pausedNoted bool
 		staleNoted  bool
+		staleSince  time.Time
+		lastAlert   time.Time
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -124,9 +127,18 @@ func main() {
 					log.Printf("unpaused")
 					pausedNoted = false
 				}
-				if pol.SensorStale(now) && !staleNoted {
-					log.Printf("sensor: no frames for %s, holding", c.stale)
-					staleNoted = true
+				if pol.SensorStale(now) {
+					if !staleNoted {
+						log.Printf("sensor: no frames for %s, holding", c.stale)
+						staleNoted = true
+						staleSince = now
+					}
+					// A dead sensor means nothing blanks the OLED. Be loud,
+					// once, then hourly.
+					if now.Sub(staleSince) > c.alertAfter && now.Sub(lastAlert) > time.Hour {
+						lastAlert = now
+						alert("Presence sensor offline. The OLED is not being blanked.")
+					}
 				}
 				if a := pol.Decide(act.tvState(), now, act.busy); a != "" {
 					pr, _ := pol.Present()
@@ -325,6 +337,13 @@ func watchSleep(ctx context.Context) <-chan sleepEvent {
 		}
 	}()
 	return out
+}
+
+func alert(msg string) {
+	log.Printf("ALERT: %s", msg)
+	home, _ := os.UserHomeDir()
+	_ = exec.Command(filepath.Join(home, ".claude/bin/claude-speak"), "--kind", "error", msg).Run()
+	_ = exec.Command("notify-send", "-u", "critical", "deskpresence", msg).Run()
 }
 
 // --- status ---------------------------------------------------------------

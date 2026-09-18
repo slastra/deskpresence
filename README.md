@@ -44,9 +44,19 @@ lets the sensor decide.
     touch $XDG_RUNTIME_DIR/deskpresence.pause # observe only, never act
     cat ~/.local/state/deskpresence/status.json
 
+## Sensor failure
+
+The point of this is the OLED. A dead sensor (unplugged, wedged) means
+nothing blanks it, so after `-alert-after` (2 min) of silence the daemon
+speaks and posts a critical notification, then repeats hourly.
+
 ## Cutover from swayidle
 
 Once a day of `journalctl --user -u deskpresence` shows clean on/off pairs,
-drop `~/.config/hypr/idle.sh` from `hyprland.lua` and kill the running
-swayidle. This daemon already covers before-sleep/after-resume. Until then
-both run; the state file makes the double `off` harmless.
+swayidle stops being the primary. Recommended end state is not to delete it
+but to demote it: change the timeout in `~/.config/hypr/idle.sh` from 600 to
+1800 so it is a last-resort burn-in guard if this daemon or the sensor dies.
+If it fires while someone is reading, this daemon turns the TV back on within
+a few seconds (level-triggered, not edge). Before-sleep/after-resume hooks can
+stay, they never fire on a machine that does not suspend. Until the cutover
+both run at full strength; the state file makes the double `off` harmless.
