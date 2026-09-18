@@ -1,0 +1,13 @@
+[Unit]
+Description=deskpresence: mmWave desk presence -> TV on/off
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/go/bin/deskpresence
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
