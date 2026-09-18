@@ -84,6 +84,7 @@ func main() {
 		staleNoted  bool
 		staleSince  time.Time
 		lastAlert   time.Time
+		everSeen    bool // never alert about a sensor that was never plugged in
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -100,6 +101,7 @@ func main() {
 				log.Printf("frame: %s", f)
 			}
 			staleNoted = false
+			everSeen = true
 		case a := <-done:
 			act.busy = false
 			log.Printf("actuator: %s finished, tv=%q", a, act.tvState())
@@ -135,7 +137,7 @@ func main() {
 					}
 					// A dead sensor means nothing blanks the OLED. Be loud,
 					// once, then hourly.
-					if now.Sub(staleSince) > c.alertAfter && now.Sub(lastAlert) > time.Hour {
+					if everSeen && now.Sub(staleSince) > c.alertAfter && now.Sub(lastAlert) > time.Hour {
 						lastAlert = now
 						alert("Presence sensor offline. The OLED is not being blanked.")
 					}

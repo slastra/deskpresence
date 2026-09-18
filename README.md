@@ -48,7 +48,9 @@ lets the sensor decide.
 
 The point of this is the OLED. A dead sensor (unplugged, wedged) means
 nothing blanks it, so after `-alert-after` (2 min) of silence the daemon
-speaks and posts a critical notification, then repeats hourly.
+speaks and posts a critical notification, then repeats hourly. A sensor
+that has never been seen since the daemon started does not alert, so the
+unit can sit enabled before the hardware arrives.
 
 ## Cutover from swayidle
 
