@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"time"
 )
 
@@ -23,8 +24,12 @@ type Policy struct {
 	// "max moving energy over gates [0, NearGates) >= EnergyMin"; the
 	// module's own summary distance smears 80 cm past the body and is
 	// ignored. NearGates 0 disables this and falls back to MaxDistance.
-	NearGates  int
-	EnergyMin  int
+	NearGates int
+	EnergyMin int
+	// Fade is how long before Absence the screen should start going dark:
+	// a visible warning that the desk reads as empty, cheap to cancel with
+	// one breath. 0 disables.
+	Fade       time.Duration
 	StaleAfter time.Duration // no frames this long -> sensor unknown, no actions
 	MinBackoff time.Duration
 	MaxBackoff time.Duration
@@ -103,6 +108,27 @@ func (p *Policy) rawPresent(f Frame) bool {
 // Present reports the debounced state and whether it is known at all.
 func (p *Policy) Present() (present, known bool) {
 	return p.present, p.presentKnown
+}
+
+// FadeLevel is 0 while the desk is fresh, rising to 1 as the absence timer
+// runs out, and 1 once absent. It is what the screen dims by.
+func (p *Policy) FadeLevel(now time.Time) float64 {
+	if !p.presentKnown || p.SensorStale(now) || p.Fade <= 0 {
+		return 0
+	}
+	if !p.present {
+		return 1
+	}
+	if p.raw {
+		return 0
+	}
+	idle := now.Sub(p.confirmedAt)
+	start := p.Absence - p.Fade
+	if idle <= start {
+		return 0
+	}
+	f := float64(idle-start) / float64(p.Fade)
+	return math.Round(math.Min(1, f)*20) / 20 // 0.05 steps: few status rewrites
 }
 
 // PresentSince is when the debounced verdict last changed.

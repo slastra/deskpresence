@@ -29,7 +29,7 @@ type config struct {
 	port, script, stateFile, statusFile, pauseFile string
 	httpAddr                                       string
 	baud                                           int
-	absence, debounce, stale, alertAfter           time.Duration
+	absence, debounce, stale, alertAfter, fade     time.Duration
 	maxDistance                                    uint
 	nearGates, energyMin                           int
 	dryRun, verbose, noMpris                       bool
@@ -57,6 +57,7 @@ func main() {
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
+	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
 	flag.BoolVar(&c.noMpris, "no-mpris", false, "do not pause/resume media players on leave/return")
@@ -75,7 +76,7 @@ func main() {
 
 	pol := &Policy{
 		Absence: c.absence, Debounce: c.debounce, MaxDistance: uint16(c.maxDistance),
-		NearGates: c.nearGates, EnergyMin: c.energyMin,
+		NearGates: c.nearGates, EnergyMin: c.energyMin, Fade: c.fade,
 		StaleAfter: c.stale, MinBackoff: 30 * time.Second, MaxBackoff: 10 * time.Minute,
 	}
 
@@ -424,6 +425,7 @@ func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool) string 
 		"present":   pr,
 		"known":     known,
 		"since":     p.PresentSince().UnixMilli(),
+		"fade":      map[bool]float64{true: 0, false: p.FadeLevel(now)}[paused],
 		"sensor_ok": !p.SensorStale(now),
 		"tv":        a.tvState(),
 		"busy":      a.busy,

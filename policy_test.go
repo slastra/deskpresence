@@ -136,3 +136,46 @@ func TestBackoffAndStale(t *testing.T) {
 		t.Fatalf("stale sensor: want none, got %q", a)
 	}
 }
+
+func TestFadeLevel(t *testing.T) {
+	p := newTestPolicy()
+	p.Absence, p.Fade = 10*time.Second, 5*time.Second
+	t0 := time.Unix(1000, 0)
+	p.Observe(Frame{State: 1, MovingCM: 90}, t0)
+	if f := p.FadeLevel(t0); f != 0 {
+		t.Fatalf("fresh: want 0, got %v", f)
+	}
+	feedTo := func(sec float64) time.Time {
+		var now time.Time
+		for i := 1; i <= int(sec*10); i++ {
+			now = t0.Add(time.Duration(i) * 100 * time.Millisecond)
+			p.Observe(Frame{}, now)
+		}
+		return now
+	}
+	if f := p.FadeLevel(feedTo(4)); f != 0 {
+		t.Fatalf("4s idle: want 0, got %v", f)
+	}
+	if f := p.FadeLevel(feedTo(7.5)); f != 0.5 {
+		t.Fatalf("7.5s idle: want 0.5, got %v", f)
+	}
+	// one breath mid-fade cancels it outright
+	p.Observe(Frame{State: 1, MovingCM: 90}, t0.Add(7600*time.Millisecond))
+	if f := p.FadeLevel(t0.Add(7600 * time.Millisecond)); f != 0 {
+		t.Fatalf("one breath mid-fade: want 0, got %v", f)
+	}
+	// let it run out: absent latches and the fade holds at 1
+	p = newTestPolicy()
+	p.Absence, p.Fade = 10*time.Second, 5*time.Second
+	p.Observe(Frame{State: 1, MovingCM: 90}, t0)
+	if f := p.FadeLevel(feedTo(10)); f != 1 {
+		t.Fatalf("10s idle: want 1, got %v", f)
+	}
+	// coming back needs the arrival debounce (500 ms), then the shade lifts
+	for i := 0; i <= 6; i++ {
+		p.Observe(Frame{State: 1, MovingCM: 90}, t0.Add(11*time.Second+time.Duration(i)*100*time.Millisecond))
+	}
+	if f := p.FadeLevel(t0.Add(11600 * time.Millisecond)); f != 0 {
+		t.Fatalf("back for 600ms: want 0, got %v", f)
+	}
+}
