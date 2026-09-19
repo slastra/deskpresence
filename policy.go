@@ -62,15 +62,23 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 		}
 		return true
 	}
-	// Only a raw-present run that lasts Debounce counts as presence. A single
-	// spurious frame therefore neither flips us to present nor restarts the
-	// absence clock, which runs from the last *confirmed* presence.
-	if raw && now.Sub(p.rawSince) >= p.Debounce {
-		p.confirmedAt = now
-		if !p.present {
+	// Arrival needs a raw-present run of Debounce (a body walking in is
+	// continuous energy, so this costs nothing real). Once present, ANY frame
+	// above threshold keeps the absence clock fresh: a seated, motionless
+	// person shows up as isolated single frames of moving energy every
+	// couple of seconds, never as sustained runs (measured 2026-09-18: zero
+	// 500 ms runs in 20 s of sitting still, but no gap longer than 2.4 s).
+	// The gate rule has no empty-room blips to guard against; the old
+	// "blips must not restart the clock" defence belonged to the summary-
+	// distance rule and would blank the screen on a still reader here.
+	if raw {
+		if p.present {
+			p.confirmedAt = now
+		} else if now.Sub(p.rawSince) >= p.Debounce {
+			p.confirmedAt = now
 			p.presentAt = now
+			p.present = true
 		}
-		p.present = true
 	}
 	if !raw && p.present && now.Sub(p.confirmedAt) >= p.Absence {
 		p.present = false

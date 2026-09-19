@@ -43,21 +43,36 @@ func TestLeaveAndReturn(t *testing.T) {
 	}
 }
 
-func TestBlipDoesNotResetAbsence(t *testing.T) {
-	// A single spurious "present" frame must neither flip us to present nor
-	// restart the absence clock; only a run of Debounce length counts.
+func TestStillSitterStaysPresent(t *testing.T) {
+	// A motionless person is isolated single frames above threshold every
+	// ~2 s; each must refresh the absence clock even though none lasts
+	// Debounce. And once absence has latched, a lone frame must not flip
+	// back to present.
 	p := newTestPolicy()
+	p.Absence = 10 * time.Second
 	t0 := time.Unix(1000, 0)
-	p.Observe(Frame{State: 1, MovingCM: 50}, t0)
-	for s := 1; s <= 70; s++ {
+	here := Frame{State: 2, StaticCM: 100}
+	p.Observe(here, t0)
+	for i := 1; i <= 300; i++ { // 30 s at 10 Hz, one live frame every 2 s
 		f := Frame{}
-		if s == 30 {
-			f = Frame{State: 1, MovingCM: 80}
+		if i%20 == 0 {
+			f = here
 		}
-		p.Observe(f, t0.Add(time.Duration(s)*time.Second))
+		p.Observe(f, t0.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	if pr, _ := p.Present(); !pr {
+		t.Fatal("still sitter went absent")
+	}
+	for i := 301; i <= 420; i++ { // 12 s of nothing -> absent
+		p.Observe(Frame{}, t0.Add(time.Duration(i)*100*time.Millisecond))
 	}
 	if pr, _ := p.Present(); pr {
-		t.Fatal("still present 70s after leaving; the blip restarted the clock")
+		t.Fatal("did not latch absent after 12 s")
+	}
+	p.Observe(here, t0.Add(43*time.Second)) // one frame
+	p.Observe(Frame{}, t0.Add(43*time.Second+100*time.Millisecond))
+	if pr, _ := p.Present(); pr {
+		t.Fatal("a lone frame flipped absent -> present")
 	}
 }
 
