@@ -14,15 +14,19 @@ import (
 // audio fades the playing PipeWire streams with the screen: down to silence
 // over the absence warning, held at zero while away (the players are paused
 // underneath), and back up to their original levels when someone returns.
-// Streams are addressed by sink-input index and restored to the exact
-// volume they had; a stream that vanished meanwhile is simply skipped.
+// Streams are remembered by application name, not sink-input index:
+// Chrome (and others) tear the stream down on pause and create a fresh one
+// on play, and PipeWire's stream-restore then hands the new stream the last
+// volume written for that application, which after a fade is zero. So the
+// original level is keyed by application and every write re-lists the live
+// streams and applies to all of that application's current ones.
 // Volume is set through pactl rather than MPRIS because Firefox's MPRIS
 // ignores its Volume property.
 type audio struct {
 	mu      sync.Mutex
-	exclude []string        // application.name substrings left alone (UI cues)
-	orig    map[int]float64 // index -> original volume fraction, while faded
-	level   float64         // last applied fade level
+	exclude []string           // application.name substrings left alone (UI cues)
+	orig    map[string]float64 // application.name -> original volume, while faded
+	level   float64            // last applied fade level
 }
 
 func newAudio(exclude string) *audio {
@@ -32,7 +36,7 @@ func newAudio(exclude string) *audio {
 			ex = append(ex, strings.ToLower(e))
 		}
 	}
-	return &audio{exclude: ex, orig: map[int]float64{}}
+	return &audio{exclude: ex, orig: map[string]float64{}}
 }
 
 type sinkInput struct {
@@ -54,7 +58,7 @@ func (a *audio) streams() []sinkInput {
 	var keep []sinkInput
 	for _, s := range all {
 		name := strings.ToLower(s.Properties["application.name"])
-		skip := s.Corked || len(s.Volume) == 0
+		skip := s.Corked || len(s.Volume) == 0 || name == ""
 		for _, e := range a.exclude {
 			if strings.Contains(name, e) {
 				skip = true
@@ -74,9 +78,16 @@ func volumeOf(s sinkInput) float64 {
 	return 1
 }
 
-func (a *audio) set(index int, frac float64) {
-	pct := int(frac*100 + 0.5)
-	_ = exec.Command("pactl", "set-sink-input-volume", strconv.Itoa(index), fmt.Sprintf("%d%%", pct)).Run()
+func appOf(s sinkInput) string { return strings.ToLower(s.Properties["application.name"]) }
+
+// setAll writes frac*orig to every live stream of each remembered application.
+func (a *audio) setAll(frac float64) {
+	for _, s := range a.streams() {
+		if v, ok := a.orig[appOf(s)]; ok {
+			pct := int(v*frac*100 + 0.5)
+			_ = exec.Command("pactl", "set-sink-input-volume", strconv.Itoa(s.Index), fmt.Sprintf("%d%%", pct)).Run()
+		}
+	}
 }
 
 // apply moves every faded stream to orig*(1-level). The first non-zero
@@ -94,21 +105,21 @@ func (a *audio) apply(level float64) {
 	}
 	if level > 0 && len(a.orig) == 0 {
 		for _, s := range a.streams() {
-			a.orig[s.Index] = volumeOf(s)
+			if _, seen := a.orig[appOf(s)]; !seen {
+				a.orig[appOf(s)] = volumeOf(s)
+			}
 		}
 		if len(a.orig) > 0 {
-			log.Printf("audio: fading %d stream(s)", len(a.orig))
+			log.Printf("audio: fading %v", a.orig)
 		}
 	}
-	for idx, v := range a.orig {
-		a.set(idx, v*(1-level))
-	}
+	a.setAll(1 - level)
 	a.level = level
 	if level == 0 {
 		if len(a.orig) > 0 {
 			log.Printf("audio: restored")
 		}
-		a.orig = map[int]float64{}
+		a.orig = map[string]float64{}
 	}
 }
 
@@ -126,12 +137,16 @@ func (a *audio) rampUp(d time.Duration) {
 	}
 	const steps = 8
 	for i := 1; i <= steps; i++ {
-		for idx, v := range a.orig {
-			a.set(idx, v*float64(i)/steps)
-		}
+		a.setAll(float64(i) / steps)
 		time.Sleep(d / steps)
 	}
-	log.Printf("audio: ramped %d stream(s) back up", len(a.orig))
-	a.orig = map[int]float64{}
+	// A player that recreates its stream on play may do so late; two more
+	// full-volume passes catch it before we forget the originals.
+	for i := 0; i < 2; i++ {
+		time.Sleep(time.Second)
+		a.setAll(1)
+	}
+	log.Printf("audio: ramped %v back up", a.orig)
+	a.orig = map[string]float64{}
 	a.level = 0
 }
