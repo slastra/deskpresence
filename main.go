@@ -115,6 +115,7 @@ func main() {
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
+	hist := newHistory(filepath.Join(filepath.Dir(c.statusFile), "history.json"), 500*time.Millisecond, 120)
 	log.Printf("deskpresence up: absence=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.absence, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
 
 	for {
@@ -126,6 +127,7 @@ func main() {
 			now := time.Now()
 			flipped := pol.Observe(f, now)
 			h.publish("frame", toEvent(f, now))
+			hist.observe(f, c.nearGates, now)
 			if c.verbose {
 				log.Printf("frame: %s", f)
 			} else if flipped {
@@ -201,6 +203,9 @@ func main() {
 					act.busy = true
 					go func() { act.run(a); done <- a }()
 				}
+			}
+			if pr, known := pol.Present(); known {
+				hist.tick(now, pr, c.energyMin)
 			}
 			if s := status(pol, act, lastFrame, now, pausedNoted); s != lastStatus {
 				writeStatus(c.statusFile, s)
