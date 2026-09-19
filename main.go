@@ -32,7 +32,8 @@ type config struct {
 	absence, debounce, stale, alertAfter, fade     time.Duration
 	maxDistance                                    uint
 	nearGates, energyMin                           int
-	dryRun, verbose, noMpris                       bool
+	dryRun, verbose, noMpris, noAudioFade          bool
+	audioExclude                                   string
 	replay                                         string
 }
 
@@ -60,6 +61,8 @@ func main() {
 	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
+	flag.BoolVar(&c.noAudioFade, "no-audio-fade", false, "do not fade PipeWire streams with the screen")
+	flag.StringVar(&c.audioExclude, "audio-exclude", "emotune,speech-dispatcher", "application.name substrings never faded")
 	flag.BoolVar(&c.noMpris, "no-mpris", false, "do not pause/resume media players on leave/return")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -100,6 +103,10 @@ func main() {
 	var media *mpris
 	if !c.noMpris {
 		media = newMpris()
+	}
+	var snd *audio
+	if !c.noAudioFade {
+		snd = newAudio(c.audioExclude)
 	}
 	var lastPresent, lastKnown bool
 	done := make(chan string, 1)
@@ -170,11 +177,22 @@ func main() {
 				if lastKnown && pr != lastPresent {
 					if pr {
 						media.resume()
+						go snd.rampUp(1500 * time.Millisecond)
 					} else {
+						snd.apply(1) // silence before the pause so nothing pops
 						media.pauseAll()
 					}
 				}
 				lastPresent, lastKnown = pr, true
+			}
+			// Audio follows the same fade as the screen. While away it holds
+			// at zero (the verdict flip above already applied 1); rampUp owns
+			// the way back, so skip apply until it has cleared the snapshot.
+			if pr, known := pol.Present(); known && pr && !pausedNoted && snd != nil {
+				lvl := pol.FadeLevel(now)
+				if lvl > 0 && lvl < 1 || lvl == 0 && snd.level > 0 && snd.level < 1 {
+					snd.apply(lvl) // rising, or cancelled mid-fade (restore)
+				}
 			}
 			if _, err := os.Stat(c.pauseFile); err == nil {
 				if !pausedNoted {
