@@ -27,6 +27,7 @@ import (
 
 type config struct {
 	port, script, stateFile, statusFile, pauseFile string
+	httpAddr                                       string
 	baud                                           int
 	absence, debounce, stale, alertAfter           time.Duration
 	maxDistance                                    uint
@@ -54,6 +55,7 @@ func main() {
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
+	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		// flags after the subcommand: deskpresence config [-port X] show
@@ -76,10 +78,14 @@ func main() {
 	defer stop()
 
 	frames := make(chan Frame, 64)
+	h := newHub()
+	if c.httpAddr != "" {
+		go h.serve(c.httpAddr)
+	}
 	if c.replay != "" {
 		go replayFrames(ctx, c.replay, frames)
 	} else {
-		go readSerial(ctx, c, frames)
+		go readSerial(ctx, c, frames, h)
 	}
 
 	sleep := watchSleep(ctx) // nil channel when logind is unavailable
@@ -109,6 +115,7 @@ func main() {
 			lastFrame = f
 			now := time.Now()
 			flipped := pol.Observe(f, now)
+			h.publish("frame", toEvent(f, now))
 			if c.verbose {
 				log.Printf("frame: %s", f)
 			} else if flipped {
@@ -175,6 +182,7 @@ func main() {
 			}
 			if s := status(pol, act, lastFrame, now, pausedNoted); s != lastStatus {
 				writeStatus(c.statusFile, s)
+				h.publish("status", json.RawMessage(s))
 				lastStatus = s
 			}
 		}
@@ -215,7 +223,7 @@ func (a *actuator) run(action string) {
 
 // --- serial ---------------------------------------------------------------
 
-func readSerial(ctx context.Context, c config, out chan<- Frame) {
+func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 	var lastErr string
 	for ctx.Err() == nil {
 		dev := resolvePort(c.port)
@@ -230,8 +238,15 @@ func readSerial(ctx context.Context, c config, out chan<- Frame) {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
-		log.Printf("serial: reading %s at %d", dev, c.baud)
 		lastErr = ""
+		_ = port.SetReadTimeout(300 * time.Millisecond)
+		if prm, err := enterEngineering(port); err != nil {
+			log.Printf("serial: engineering mode: %v (basic frames only)", err)
+		} else {
+			h.setParams(prm)
+			log.Printf("serial: engineering mode on, static thresholds %v, moving %v", prm.StaticSens, prm.MovingSens)
+		}
+		log.Printf("serial: reading %s at %d", dev, c.baud)
 		_ = port.SetReadTimeout(time.Second)
 		var p Parser
 		buf := make([]byte, 512)

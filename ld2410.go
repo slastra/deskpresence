@@ -15,6 +15,8 @@ type Frame struct {
 	StaticCM    uint16 // stationary target distance
 	StaticEn    byte
 	DetectCM    uint16 // sensor's own "detection distance"
+	MovingGates []byte // engineering mode only: per-gate energy 0-100
+	StaticGates []byte
 }
 
 func (f Frame) Present() bool { return f.State != 0 }
@@ -94,6 +96,13 @@ func (p *Parser) Feed(b []byte) []Frame {
 			StaticCM:    binary.LittleEndian.Uint16(payload[6:8]),
 			StaticEn:    payload[8],
 			DetectCM:    binary.LittleEndian.Uint16(payload[9:11]),
+		}
+		if f.Engineering && len(payload) >= 13 {
+			nm, ns := int(payload[11])+1, int(payload[12])+1
+			if len(payload) >= 13+nm+ns {
+				f.MovingGates = append([]byte{}, payload[13:13+nm]...)
+				f.StaticGates = append([]byte{}, payload[13+nm:13+nm+ns]...)
+			}
 		}
 		out = append(out, f)
 		p.buf = p.buf[total:]

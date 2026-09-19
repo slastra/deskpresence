@@ -1,0 +1,267 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskpresence</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --surface-0: #111110;
+    --surface-1: #1a1a19;
+    --surface-2: #242423;
+    --line: #383835;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8a8980;
+    --mv: #d95926;   /* moving = orange */
+    --st: #3987e5;   /* static = blue */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --mono: "ShureTechMono Nerd Font", ui-monospace, Menlo, monospace;
+  }
+  html, body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 14px/1.4 system-ui, sans-serif; }
+  body { padding: 16px 20px 32px; max-width: 1400px; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; margin-bottom: 14px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+    background: var(--surface-2); color: var(--text-secondary); font-family: var(--mono); font-size: 13px; }
+  .chip b { color: var(--text-primary); font-weight: 600; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .chip.present .dot { background: var(--good); }
+  .chip.absent .dot { background: var(--text-muted); }
+  .chip.stale .dot { background: var(--critical); }
+  .panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px 10px; margin-bottom: 12px; }
+  .panel h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 0 0 8px;
+    text-transform: uppercase; letter-spacing: .06em; display: flex; gap: 14px; align-items: baseline; }
+  .panel h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
+  .legend { margin-left: auto; display: flex; gap: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .ramp { display: inline-block; width: 90px; height: 8px; border-radius: 2px; vertical-align: middle; margin: 0 6px; }
+  canvas { display: block; width: 100%; }
+  .wrap { position: relative; }
+  #tip { position: absolute; pointer-events: none; display: none; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font-family: var(--mono);
+    font-size: 12px; color: var(--text-secondary); white-space: pre; z-index: 2; }
+  table { border-collapse: collapse; font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
+  td, th { padding: 2px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+  th { color: var(--text-muted); font-weight: 400; }
+  td:first-child, th:first-child { text-align: left; }
+  td.over { color: var(--text-primary); font-weight: 600; }
+  .note { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
+</style>
+
+<header>
+  <h1>deskpresence</h1>
+  <span class="sub" style="color:var(--text-muted)">LD2410C · engineering mode · last 60 s</span>
+  <div class="chips">
+    <span class="chip" id="cPresent"><span class="dot"></span><b>—</b></span>
+    <span class="chip" id="cTv">tv <b>—</b></span>
+    <span class="chip" id="cDist">closest <b>—</b></span>
+    <span class="chip" id="cState">sensor <b>—</b></span>
+  </div>
+</header>
+
+<div class="wrap" id="wrap">
+  <div class="panel">
+    <h2>Moving energy by gate <span class="sub">0 <span class="ramp" id="rampMv"></span> 100 · threshold at right</span></h2>
+    <canvas id="hmMv" height="200"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Static energy by gate <span class="sub">0 <span class="ramp" id="rampSt"></span> 100 · threshold at right</span></h2>
+    <canvas id="hmSt" height="200"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Reported distance
+      <span class="legend"><span><i style="background:var(--mv)"></i>moving</span><span><i style="background:var(--st)"></i>static</span><span><i style="background:var(--text-muted);height:1px"></i>daemon cap</span></span>
+    </h2>
+    <canvas id="dist" height="170"></canvas>
+    <canvas id="band" height="34"></canvas>
+    <div class="note">Band: top row is the sensor's own target state (moving / static / both), bottom row is the daemon's debounced verdict.</div>
+  </div>
+  <div id="tip"></div>
+</div>
+
+<div class="panel">
+  <h2>Latest frame <span class="sub" id="tParams"></span></h2>
+  <table id="tbl"></table>
+</div>
+
+<script>
+const N = 600;                       // 60 s at 10 Hz
+const GATE_CM = 75;
+const CAP_CM = 150;                  // daemon -max-distance (display only)
+const css = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
+
+// Sequential ramps, dark-mode: near-zero recedes toward the surface, high is bright.
+const RAMP_ST = ['#1a1a19','#0d366b','#104281','#184f95','#1c5cab','#256abf','#2a78d6','#3987e5','#5598e7','#6da7ec','#86b6ef','#9ec5f4','#b7d3f6','#cde2fb'];
+const RAMP_MV = ['#1a1a19','#3a1a0c','#4e2310','#652d14','#7d3718','#96421c','#b04a1f','#c85223','#d95926','#e2733f','#e98c5f','#f0a682','#f6c1a6','#fbdccb'];
+function rampColor(ramp, v) {        // v 0..100 -> interpolated hex
+  const x = Math.max(0, Math.min(100, v)) / 100 * (ramp.length - 1);
+  const i = Math.floor(x), t = x - i;
+  const a = ramp[i], b = ramp[Math.min(i + 1, ramp.length - 1)];
+  const c = k => Math.round(parseInt(a.slice(k, k + 2), 16) * (1 - t) + parseInt(b.slice(k, k + 2), 16) * t);
+  return `rgb(${c(1)},${c(3)},${c(5)})`;
+}
+for (const [id, r] of [['rampMv', RAMP_MV], ['rampSt', RAMP_ST]])
+  document.getElementById(id).style.background = `linear-gradient(90deg, ${r.join(',')})`;
+
+const frames = [];                   // ring of last N frames
+let params = null, status = null, hoverX = null, dirty = true;
+
+const es = new EventSource('/events');
+es.addEventListener('frame', e => { frames.push(JSON.parse(e.data)); if (frames.length > N) frames.shift(); dirty = true; });
+es.addEventListener('status', e => { status = JSON.parse(e.data); chips(); dirty = true; });
+es.addEventListener('params', e => { params = JSON.parse(e.data); paramsNote(); dirty = true; });
+es.onerror = () => { document.getElementById('cState').className = 'chip stale'; document.querySelector('#cState b').textContent = 'stream lost'; };
+
+function chips() {
+  const f = frames[frames.length - 1];
+  const p = document.getElementById('cPresent');
+  if (status) {
+    p.className = 'chip ' + (!status.sensor_ok ? 'stale' : status.present ? 'present' : 'absent');
+    p.querySelector('b').textContent = !status.sensor_ok ? 'sensor silent' : status.present ? 'present' : 'absent';
+    document.querySelector('#cTv b').textContent = status.tv || 'unknown';
+    document.querySelector('#cDist b').textContent = status.distance ? status.distance + ' cm' : 'none';
+  }
+  if (f) document.querySelector('#cState b').textContent = ['none', 'moving', 'static', 'both'][f.state] ?? f.state;
+}
+function paramsNote() {
+  if (!params) return;
+  document.getElementById('tParams').textContent =
+    `module: moving to gate ${params.MaxMoving} · static to gate ${params.MaxStatic} · unmanned ${params.UnmannedSeconds}s`;
+}
+
+// ---- drawing ------------------------------------------------------------
+const L = 44, R = 46, T = 6, B = 22; // plot margins: gate labels left, thresholds right
+function setup(c) {
+  const dpr = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [g, w, h];
+}
+const xOf = (i, w) => L + (i / (N - 1)) * (w - L - R);
+
+function heatmap(c, key, ramp, sens) {
+  const [g, w, h] = setup(c);
+  g.clearRect(0, 0, w, h);
+  const gates = 9, rowH = (h - T - B) / gates, colW = (w - L - R) / (N - 1);
+  g.font = '11px ' + css('--mono'); g.textBaseline = 'middle';
+  for (let r = 0; r < gates; r++) {
+    const y = T + r * rowH;
+    g.fillStyle = css('--text-muted'); g.textAlign = 'right';
+    g.fillText(`${r * GATE_CM}`, L - 6, y + rowH / 2);
+    g.textAlign = 'left';
+    if (sens) { g.fillStyle = sens[r] >= 100 ? css('--text-muted') : css('--text-secondary'); g.fillText(sens[r] >= 100 ? 'off' : '≥' + sens[r], w - R + 6, y + rowH / 2); }
+  }
+  const off = N - frames.length;
+  for (let i = 0; i < frames.length; i++) {
+    const e = frames[i][key]; if (!e) continue;
+    const x = xOf(off + i, w);
+    for (let r = 0; r < gates && r < e.length; r++) {
+      g.fillStyle = rampColor(ramp, e[r]);
+      g.fillRect(x, T + r * rowH + 1, colW + 0.6, rowH - 2);
+    }
+  }
+  timeAxis(g, w, h);
+  crosshair(g, w, h);
+}
+
+function distChart(c) {
+  const [g, w, h] = setup(c);
+  g.clearRect(0, 0, w, h);
+  const maxCM = 675, yOf = cm => T + (1 - Math.min(cm, maxCM) / maxCM) * (h - T - B);
+  g.font = '11px ' + css('--mono'); g.textBaseline = 'middle';
+  for (const cm of [0, 150, 300, 450, 600]) {
+    g.strokeStyle = css('--line'); g.lineWidth = 1; g.beginPath(); g.moveTo(L, yOf(cm) + .5); g.lineTo(w - R, yOf(cm) + .5); g.stroke();
+    g.fillStyle = css('--text-muted'); g.textAlign = 'right'; g.fillText(cm, L - 6, yOf(cm));
+  }
+  g.setLineDash([4, 4]); g.strokeStyle = css('--text-secondary'); g.beginPath(); g.moveTo(L, yOf(CAP_CM) + .5); g.lineTo(w - R, yOf(CAP_CM) + .5); g.stroke(); g.setLineDash([]);
+  g.fillStyle = css('--text-muted'); g.textAlign = 'left'; g.fillText('cap ' + CAP_CM, w - R + 6, yOf(CAP_CM));
+  const off = N - frames.length;
+  for (const [key, col, flag] of [['st', css('--st'), 2], ['mv', css('--mv'), 1]]) {
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.beginPath(); let pen = false;
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i], on = (f.state & flag) !== 0;
+      if (!on) { pen = false; continue; }
+      const x = xOf(off + i, w), y = yOf(f[key]);
+      pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true;
+    }
+    g.stroke();
+  }
+  timeAxis(g, w, h);
+  crosshair(g, w, h);
+}
+
+function bandChart(c) {
+  const [g, w, h] = setup(c);
+  g.clearRect(0, 0, w, h);
+  const off = N - frames.length, colW = (w - L - R) / (N - 1), rowH = (h - 4) / 2;
+  g.font = '10px ' + css('--mono'); g.textBaseline = 'middle'; g.textAlign = 'right'; g.fillStyle = css('--text-muted');
+  g.fillText('sensor', L - 6, rowH / 2); g.fillText('daemon', L - 6, rowH + 4 + rowH / 2);
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i], x = xOf(off + i, w);
+    g.fillStyle = f.state === 0 ? css('--surface-2') : f.state === 1 ? css('--mv') : f.state === 2 ? css('--st') : '#9085e9';
+    g.fillRect(x, 0, colW + .6, rowH);
+    if (f.present !== undefined) { g.fillStyle = f.present ? css('--good') : css('--surface-2'); g.fillRect(x, rowH + 4, colW + .6, rowH); }
+  }
+  crosshair(g, w, h);
+}
+
+function timeAxis(g, w, h) {
+  g.fillStyle = css('--text-muted'); g.font = '11px ' + css('--mono'); g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  for (let s = 0; s <= 60; s += 10) { const x = xOf(N - 1 - s * 10, w); g.fillText(s === 0 ? 'now' : `-${s}s`, x, h - 6); }
+}
+function crosshair(g, w, h) {
+  if (hoverX == null) return;
+  g.strokeStyle = css('--text-secondary'); g.lineWidth = 1; g.beginPath(); g.moveTo(hoverX + .5, 0); g.lineTo(hoverX + .5, h - B + 4); g.stroke();
+}
+
+const cv = { mv: document.getElementById('hmMv'), st: document.getElementById('hmSt'), d: document.getElementById('dist'), b: document.getElementById('band') };
+function draw() {
+  requestAnimationFrame(draw);
+  if (!dirty) return; dirty = false;
+  // stamp the daemon verdict onto the newest frame so the band can show it
+  if (status && frames.length) frames[frames.length - 1].present = status.present;
+  heatmap(cv.mv, 'mg', RAMP_MV, params?.MovingSens);
+  heatmap(cv.st, 'sg', RAMP_ST, params?.StaticSens);
+  distChart(cv.d); bandChart(cv.b); table(); chips();
+}
+draw();
+addEventListener('resize', () => dirty = true);
+
+// ---- hover --------------------------------------------------------------
+const wrap = document.getElementById('wrap'), tip = document.getElementById('tip');
+wrap.addEventListener('mousemove', ev => {
+  const c = cv.d, r = c.getBoundingClientRect(), w = c.clientWidth;
+  const x = ev.clientX - r.left;
+  if (x < L || x > w - R || !frames.length) { hoverX = null; tip.style.display = 'none'; dirty = true; return; }
+  hoverX = x; dirty = true;
+  const idx = Math.round((x - L) / (w - L - R) * (N - 1)) - (N - frames.length);
+  const f = frames[Math.max(0, Math.min(frames.length - 1, idx))];
+  if (!f) return;
+  const ago = ((Date.now() - f.t) / 1000).toFixed(1);
+  let s = `-${ago}s  ${['none','moving','static','both'][f.state]}\nmoving ${f.mv} cm / ${f.mvE}\nstatic ${f.st} cm / ${f.stE}\ndetect ${f.det} cm`;
+  if (f.mg) s += `\n\ngate   mv  st\n` + f.mg.map((v, i) => `${String(i * GATE_CM).padStart(4)}  ${String(v).padStart(3)} ${String(f.sg?.[i] ?? '').padStart(3)}`).join('\n');
+  tip.textContent = s;
+  const wr = wrap.getBoundingClientRect();
+  tip.style.left = Math.min(ev.clientX - wr.left + 14, wr.width - 200) + 'px';
+  tip.style.top = (ev.clientY - wr.top + 14) + 'px';
+  tip.style.display = 'block';
+});
+wrap.addEventListener('mouseleave', () => { hoverX = null; tip.style.display = 'none'; dirty = true; });
+
+// ---- table view ---------------------------------------------------------
+function table() {
+  const f = frames[frames.length - 1]; if (!f || !f.mg) return;
+  const ms = params?.MovingSens ?? [], ss = params?.StaticSens ?? [];
+  let html = '<tr><th>gate</th>' + f.mg.map((_, i) => `<th>${i * GATE_CM}–${(i + 1) * GATE_CM}</th>`).join('') + '</tr>';
+  html += '<tr><td>moving</td>' + f.mg.map((v, i) => `<td class="${ms[i] != null && v >= ms[i] && ms[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
+  html += '<tr><td>static</td>' + f.sg.map((v, i) => `<td class="${ss[i] != null && v >= ss[i] && ss[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
+  html += '<tr><td>threshold mv</td>' + ms.map(v => `<td>${v}</td>`).join('') + '</tr>';
+  html += '<tr><td>threshold st</td>' + ss.map(v => `<td>${v}</td>`).join('') + '</tr>';
+  document.getElementById('tbl').innerHTML = html;
+}
+</script>

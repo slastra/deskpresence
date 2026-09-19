@@ -48,21 +48,16 @@ func runConfig(args []string, portGlob string, baud int) {
 
 	switch args[0] {
 	case "show":
-		p := s.must(0x0061, nil)
-		// AA, maxGate, maxMoving, maxStatic, moving[0..maxGate], static[0..maxGate], duration(2)
-		if len(p) < 4 || p[0] != 0xAA {
-			fatalf("unexpected parameter payload % X", p)
-		}
-		n := int(p[1]) + 1
-		if len(p) < 4+2*n+2 {
-			fatalf("short parameter payload % X", p)
+		prm, err := parseParams(s.must(0x0061, nil))
+		if err != nil {
+			fatalf("%v", err)
 		}
 		fmt.Printf("gates: max %d  moving up to gate %d (%d cm)  static up to gate %d (%d cm)\n",
-			p[1], p[2], (int(p[2])+1)*75, p[3], (int(p[3])+1)*75)
-		fmt.Printf("unmanned duration: %d s\n", binary.LittleEndian.Uint16(p[4+2*n:]))
+			prm.MaxGate, prm.MaxMoving, (prm.MaxMoving+1)*75, prm.MaxStatic, (prm.MaxStatic+1)*75)
+		fmt.Printf("unmanned duration: %d s\n", prm.UnmannedSeconds)
 		fmt.Printf("%-6s %-10s %-8s %-8s\n", "gate", "range", "moving", "static")
-		for g := 0; g < n; g++ {
-			fmt.Printf("%-6d %3d-%-6d %-8d %-8d\n", g, g*75, (g+1)*75, p[4+g], p[4+n+g])
+		for g := 0; g <= prm.MaxGate; g++ {
+			fmt.Printf("%-6d %3d-%-6d %-8d %-8d\n", g, g*75, (g+1)*75, prm.MovingSens[g], prm.StaticSens[g])
 		}
 	case "gates":
 		if len(args) != 4 {
@@ -93,9 +88,62 @@ func runConfig(args []string, portGlob string, baud int) {
 
 type session struct{ port serial.Port }
 
-// must sends a command and waits for its ack, returning the ack payload after
-// the status word.
+// Params is the module's detection configuration (command 0x61).
+type Params struct {
+	MaxGate, MaxMoving, MaxStatic int
+	MovingSens, StaticSens        []int // per-gate thresholds 0-100
+	UnmannedSeconds               int
+}
+
+func parseParams(p []byte) (Params, error) {
+	if len(p) < 4 || p[0] != 0xAA {
+		return Params{}, fmt.Errorf("unexpected parameter payload % X", p)
+	}
+	n := int(p[1]) + 1
+	if len(p) < 4+2*n+2 {
+		return Params{}, fmt.Errorf("short parameter payload % X", p)
+	}
+	return Params{
+		MaxGate: int(p[1]), MaxMoving: int(p[2]), MaxStatic: int(p[3]),
+		MovingSens:      ints(p[4 : 4+n]),
+		StaticSens:      ints(p[4+n : 4+2*n]),
+		UnmannedSeconds: int(binary.LittleEndian.Uint16(p[4+2*n:])),
+	}, nil
+}
+
+// enterEngineering switches a freshly opened port to engineering mode (per-gate
+// energies in every frame) and returns the module parameters. Engineering mode
+// does not persist across module power cycles, so the daemon does this on
+// every (re)connect.
+func enterEngineering(port serial.Port) (Params, error) {
+	s := &session{port: port}
+	if _, err := s.send(0x00FF, []byte{0x01, 0x00}); err != nil {
+		return Params{}, err
+	}
+	defer s.send(0x00FE, nil)
+	raw, err := s.send(0x0061, nil)
+	if err != nil {
+		return Params{}, err
+	}
+	prm, err := parseParams(raw)
+	if err != nil {
+		return Params{}, err
+	}
+	_, err = s.send(0x0062, nil)
+	return prm, err
+}
+
 func (s *session) must(cmd uint16, value []byte) []byte {
+	out, err := s.send(cmd, value)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	return out
+}
+
+// send issues a command and waits for its ack, returning the ack payload after
+// the status word.
+func (s *session) send(cmd uint16, value []byte) ([]byte, error) {
 	body := make([]byte, 2, 2+len(value))
 	binary.LittleEndian.PutUint16(body, cmd)
 	body = append(body, value...)
@@ -104,7 +152,7 @@ func (s *session) must(cmd uint16, value []byte) []byte {
 	frame = append(frame, body...)
 	frame = append(frame, cmdFooter...)
 	if _, err := s.port.Write(frame); err != nil {
-		fatalf("write: %v", err)
+		return nil, fmt.Errorf("write: %w", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	var buf []byte
@@ -112,7 +160,7 @@ func (s *session) must(cmd uint16, value []byte) []byte {
 	for time.Now().Before(deadline) {
 		n, err := s.port.Read(tmp)
 		if err != nil {
-			fatalf("read: %v", err)
+			return nil, fmt.Errorf("read: %w", err)
 		}
 		buf = append(buf, tmp[:n]...)
 		for {
@@ -128,14 +176,13 @@ func (s *session) must(cmd uint16, value []byte) []byte {
 			buf = buf[i+6+ln+4:]
 			if len(body) >= 4 && binary.LittleEndian.Uint16(body) == cmd|0x0100 {
 				if st := binary.LittleEndian.Uint16(body[2:]); st != 0 {
-					fatalf("command %04X failed, status %d", cmd, st)
+					return nil, fmt.Errorf("command %04X failed, status %d", cmd, st)
 				}
-				return body[4:]
+				return body[4:], nil
 			}
 		}
 	}
-	fatalf("no ack for command %04X", cmd)
-	return nil
+	return nil, fmt.Errorf("no ack for command %04X", cmd)
 }
 
 // params encodes word/dword pairs as the 0x60 and 0x64 commands expect.
