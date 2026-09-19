@@ -40,7 +40,8 @@
   .legend { margin-left: auto; display: flex; gap: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; }
   .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
   .ramp { display: inline-block; width: 90px; height: 8px; border-radius: 2px; vertical-align: middle; margin: 0 6px; }
-  canvas { display: block; width: 100%; }
+  canvas { display: block; width: 100%; height: 200px; }
+  #dist { height: 170px; } #band { height: 34px; margin-top: 6px; }
   .wrap { position: relative; }
   #tip { position: absolute; pointer-events: none; display: none; background: var(--surface-2);
     border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font-family: var(--mono);
@@ -55,7 +56,7 @@
 
 <header>
   <h1>deskpresence</h1>
-  <span class="sub" style="color:var(--text-muted)">LD2410C · engineering mode · last 60 s</span>
+  <span class="sub" style="color:var(--text-muted)">LD2410C · engineering mode · last 120 s</span>
   <div class="chips">
     <span class="chip" id="cPresent"><span class="dot"></span><b>—</b></span>
     <span class="chip" id="cTv">tv <b>—</b></span>
@@ -90,7 +91,7 @@
 </div>
 
 <script>
-const N = 600;                       // 60 s at 10 Hz
+const N = 1200;                      // 120 s at 10 Hz
 const GATE_CM = 75;
 const CAP_CM = 150;                  // daemon -max-distance (display only)
 const css = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
@@ -212,7 +213,7 @@ function bandChart(c) {
 
 function timeAxis(g, w, h) {
   g.fillStyle = css('--text-muted'); g.font = '11px ' + css('--mono'); g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-  for (let s = 0; s <= 60; s += 10) { const x = xOf(N - 1 - s * 10, w); g.fillText(s === 0 ? 'now' : `-${s}s`, x, h - 6); }
+  for (let s = 0; s <= 120; s += 20) { const x = xOf(N - 1 - s * 10, w); g.fillText(s === 0 ? 'now' : `-${s}s`, x, h - 6); }
 }
 function crosshair(g, w, h) {
   if (hoverX == null) return;
