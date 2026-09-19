@@ -131,9 +131,10 @@ func main() {
 			hist.observe(f, c.nearGates, now)
 			if c.verbose {
 				log.Printf("frame: %s", f)
-			} else if flipped {
-				// Raw edges are the calibration evidence: what the sensor saw
-				// the instant it decided the desk was empty or occupied.
+			} else if pr, _ := pol.Present(); flipped && !pr {
+				// Raw edges while the verdict is "away" are the interesting
+				// ones (arrivals, phantoms). While seated the energy rule
+				// flips at frame rate and the live view/history carry that.
 				flips++
 				if now.Sub(flipWindow) > time.Minute {
 					flipWindow, flips = now, 1
