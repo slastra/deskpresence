@@ -25,6 +25,7 @@ type Policy struct {
 	raw          bool
 	confirmedAt  time.Time // last time a raw-present run reached Debounce
 	present      bool
+	presentAt    time.Time // when the debounced verdict last flipped
 	presentKnown bool
 	lastDecision string // last action requested
 	lastAttempt  time.Time
@@ -45,6 +46,7 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 		// First reading seeds the debounced state immediately so a fresh start
 		// with someone in the chair does not wait out the absence timer.
 		p.present = raw
+		p.presentAt = now
 		p.presentKnown = true
 		if raw {
 			p.confirmedAt = now
@@ -56,10 +58,14 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	// absence clock, which runs from the last *confirmed* presence.
 	if raw && now.Sub(p.rawSince) >= p.Debounce {
 		p.confirmedAt = now
+		if !p.present {
+			p.presentAt = now
+		}
 		p.present = true
 	}
 	if !raw && p.present && now.Sub(p.confirmedAt) >= p.Absence {
 		p.present = false
+		p.presentAt = now
 	}
 	return flipped
 }
@@ -68,6 +74,9 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 func (p *Policy) Present() (present, known bool) {
 	return p.present, p.presentKnown
 }
+
+// PresentSince is when the debounced verdict last changed.
+func (p *Policy) PresentSince() time.Time { return p.presentAt }
 
 func (p *Policy) SensorStale(now time.Time) bool {
 	return p.lastFrame.IsZero() || now.Sub(p.lastFrame) > p.StaleAfter

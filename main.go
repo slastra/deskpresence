@@ -394,6 +394,7 @@ func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool) string 
 	s := map[string]any{
 		"present":   pr,
 		"known":     known,
+		"since":     p.PresentSince().UnixMilli(),
 		"sensor_ok": !p.SensorStale(now),
 		"tv":        a.tvState(),
 		"busy":      a.busy,
