@@ -55,6 +55,15 @@ func main() {
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		// flags after the subcommand: deskpresence config [-port X] show
+		fs := flag.NewFlagSet("config", flag.ExitOnError)
+		port := fs.String("port", "/dev/serial/by-id/*CP210*", "serial device (glob ok)")
+		baud := fs.Int("baud", 256000, "serial baud rate")
+		_ = fs.Parse(os.Args[2:])
+		runConfig(fs.Args(), *port, *baud)
+		return
+	}
 	flag.Parse()
 	log.SetFlags(0)
 
