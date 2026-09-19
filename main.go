@@ -85,6 +85,8 @@ func main() {
 		staleSince  time.Time
 		lastAlert   time.Time
 		everSeen    bool // never alert about a sensor that was never plugged in
+		flipWindow  time.Time
+		flips       int
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -96,9 +98,22 @@ func main() {
 			return
 		case f := <-frames:
 			lastFrame = f
-			pol.Observe(f, time.Now())
+			now := time.Now()
+			flipped := pol.Observe(f, now)
 			if c.verbose {
 				log.Printf("frame: %s", f)
+			} else if flipped {
+				// Raw edges are the calibration evidence: what the sensor saw
+				// the instant it decided the desk was empty or occupied.
+				flips++
+				if now.Sub(flipWindow) > time.Minute {
+					flipWindow, flips = now, 1
+				}
+				if flips <= 20 {
+					log.Printf("raw: %s", f)
+				} else if flips == 21 {
+					log.Printf("raw: flapping, muting edges for a minute")
+				}
 			}
 			staleNoted = false
 			everSeen = true

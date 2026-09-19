@@ -31,9 +31,12 @@ type Policy struct {
 	attempts     int // consecutive attempts of lastDecision
 }
 
-func (p *Policy) Observe(f Frame, now time.Time) {
+// Observe feeds one frame; it reports whether the raw (undebounced) reading
+// flipped, so the caller can log what the sensor saw at the edge.
+func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	p.lastFrame = now
 	raw := f.Present() && (p.MaxDistance == 0 || f.Distance() <= p.MaxDistance)
+	flipped = raw != p.raw
 	if raw && !p.raw {
 		p.rawSince = now
 	}
@@ -46,7 +49,7 @@ func (p *Policy) Observe(f Frame, now time.Time) {
 		if raw {
 			p.confirmedAt = now
 		}
-		return
+		return true
 	}
 	// Only a raw-present run that lasts Debounce counts as presence. A single
 	// spurious frame therefore neither flips us to present nor restarts the
@@ -58,6 +61,7 @@ func (p *Policy) Observe(f Frame, now time.Time) {
 	if !raw && p.present && now.Sub(p.confirmedAt) >= p.Absence {
 		p.present = false
 	}
+	return flipped
 }
 
 // Present reports the debounced state and whether it is known at all.
