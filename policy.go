@@ -15,10 +15,19 @@ import (
 type Policy struct {
 	Absence     time.Duration // raw-absent this long -> absent
 	Debounce    time.Duration // raw-present this long -> present
-	MaxDistance uint16        // cm; 0 = any
-	StaleAfter  time.Duration // no frames this long -> sensor unknown, no actions
-	MinBackoff  time.Duration
-	MaxBackoff  time.Duration
+	MaxDistance uint16        // cm; 0 = any (basic frames only, see NearGates)
+	// Engineering frames carry per-gate energies, and those are the honest
+	// signal: someone at the desk is *moving* energy in the near gates
+	// (typing, breathing, shifting), while the room's phantom is *static*
+	// energy in the far ones. When a frame has gate data, raw presence is
+	// "max moving energy over gates [0, NearGates) >= EnergyMin"; the
+	// module's own summary distance smears 80 cm past the body and is
+	// ignored. NearGates 0 disables this and falls back to MaxDistance.
+	NearGates  int
+	EnergyMin  int
+	StaleAfter time.Duration // no frames this long -> sensor unknown, no actions
+	MinBackoff time.Duration
+	MaxBackoff time.Duration
 
 	lastFrame    time.Time
 	rawSince     time.Time // start of the current raw-present run
@@ -36,7 +45,7 @@ type Policy struct {
 // flipped, so the caller can log what the sensor saw at the edge.
 func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	p.lastFrame = now
-	raw := f.Present() && (p.MaxDistance == 0 || f.Distance() <= p.MaxDistance)
+	raw := p.rawPresent(f)
 	flipped = raw != p.raw
 	if raw && !p.raw {
 		p.rawSince = now
@@ -68,6 +77,19 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 		p.presentAt = now
 	}
 	return flipped
+}
+
+func (p *Policy) rawPresent(f Frame) bool {
+	if p.NearGates > 0 && len(f.MovingGates) > 0 {
+		n := min(p.NearGates, len(f.MovingGates))
+		for _, e := range f.MovingGates[:n] {
+			if int(e) >= p.EnergyMin {
+				return true
+			}
+		}
+		return false
+	}
+	return f.Present() && (p.MaxDistance == 0 || f.Distance() <= p.MaxDistance)
 }
 
 // Present reports the debounced state and whether it is known at all.

@@ -70,6 +70,33 @@ func TestFarTargetIgnored(t *testing.T) {
 	}
 }
 
+func TestGateRule(t *testing.T) {
+	p := newTestPolicy()
+	p.NearGates, p.EnergyMin = 3, 40
+	t0 := time.Unix(1000, 0)
+	// engineering frame: summary says "static at 300 cm" (the phantom) but
+	// gate 1 carries moving energy 55 -> present
+	p.Observe(Frame{State: 2, StaticCM: 300, MovingGates: []byte{10, 55, 20, 0, 0, 0, 0, 0, 0}}, t0)
+	if pr, _ := p.Present(); !pr {
+		t.Fatal("near-gate energy 55 should be present regardless of summary distance")
+	}
+	// energy only in gate 3+ (beyond the desk) with the summary claiming a
+	// moving target at 120 cm -> not present
+	q := newTestPolicy()
+	q.NearGates, q.EnergyMin = 3, 40
+	q.Observe(Frame{State: 1, MovingCM: 120, MovingGates: []byte{5, 8, 12, 90, 60, 0, 0, 0, 0}}, t0)
+	if pr, _ := q.Present(); pr {
+		t.Fatal("energy only beyond the near gates must not count")
+	}
+	// basic frame (no gate data) falls back to the distance rule
+	r := newTestPolicy()
+	r.NearGates, r.EnergyMin = 3, 40
+	r.Observe(Frame{State: 1, MovingCM: 120}, t0)
+	if pr, _ := r.Present(); !pr {
+		t.Fatal("basic frame should fall back to MaxDistance")
+	}
+}
+
 func TestBackoffAndStale(t *testing.T) {
 	p := newTestPolicy()
 	t0 := time.Unix(1000, 0)

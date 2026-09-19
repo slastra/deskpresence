@@ -3,7 +3,7 @@ Description=deskpresence: mmWave desk presence -> TV on/off
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/go/bin/deskpresence -max-distance 150
+ExecStart=%h/go/bin/deskpresence -near-gates 3 -energy-min 35 -absence 10s -max-distance 150
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM

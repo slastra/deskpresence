@@ -9,11 +9,18 @@ video are irrelevant, only bodies count.
 
     TV on  <=>  someone within max-distance of the sensor
 
-"Someone" is the sensor's target state (moving or stationary) debounced by
-`-debounce` (default 500 ms) on the way in and `-absence` (default 60 s) on
-the way out. Single-frame blips neither count as presence nor restart the
-absence clock. When the sensor is silent for `-stale` (5 s) the daemon holds
-and takes no action.
+"Someone" is, in engineering mode, moving energy of at least `-energy-min`
+in any of the first `-near-gates` gates (75 cm each). The module's own
+summary distance smears ~80 cm past a seated body and its stationary channel
+is blind inside 150 cm and saturated by the room beyond it, so neither is
+used. Basic frames (no gate data) fall back to target-within-`-max-distance`.
+Debounced by `-debounce` (500 ms) on the way in and `-absence` on the way
+out. Single-frame blips neither count as presence nor restart the absence
+clock. When the sensor is silent for `-stale` (5 s) the daemon holds.
+
+Measured at this desk (2026-09-18): sitting still, near-gate moving energy
+peaks above 35 at least every 2.4 s; with the room empty it never exceeds 26.
+The unit therefore runs `-energy-min 35 -absence 10s`.
 
 The actuator is `~/.config/hypr/scripts/tv-screen.sh on|off`, which
 serialises on its own lock and writes the state it achieved to

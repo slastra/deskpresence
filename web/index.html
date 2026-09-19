@@ -67,7 +67,7 @@
 
 <div class="wrap" id="wrap">
   <div class="panel">
-    <h2>Moving energy by gate <span class="sub">0 <span class="ramp" id="rampMv"></span> 100 · threshold at right</span></h2>
+    <h2>Moving energy by gate <span class="sub">0 <span class="ramp" id="rampMv"></span> 100 · module threshold at right · <span id="ruleNote">daemon rule pending</span></span></h2>
     <canvas id="hmMv" height="200"></canvas>
   </div>
   <div class="panel">
@@ -76,11 +76,11 @@
   </div>
   <div class="panel">
     <h2>Reported distance
-      <span class="legend"><span><i style="background:var(--mv)"></i>moving</span><span><i style="background:var(--st)"></i>static</span><span><i style="background:var(--text-muted);height:1px"></i>daemon cap</span></span>
+      <span class="legend"><span><i style="background:var(--mv)"></i>moving</span><span><i style="background:var(--st)"></i>static</span></span>
     </h2>
     <canvas id="dist" height="170"></canvas>
     <canvas id="band" height="34"></canvas>
-    <div class="note">Band: top row is the sensor's own target state (moving / static / both), bottom row is the daemon's debounced verdict.</div>
+    <div class="note">The module's summary distance smears ~80 cm past a seated body and is shown for reference only. Band: top row is the sensor's own target state (moving / static / both), bottom row is the daemon's verdict.</div>
   </div>
   <div id="tip"></div>
 </div>
@@ -93,7 +93,7 @@
 <script>
 const N = 1200;                      // 120 s at 10 Hz
 const GATE_CM = 75;
-const CAP_CM = 150;                  // daemon -max-distance (display only)
+let rule = null;                     // daemon's presence rule, from status
 const css = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
 
 // Sequential ramps, dark-mode: near-zero recedes toward the surface, high is bright.
@@ -114,7 +114,7 @@ let params = null, status = null, hoverX = null, dirty = true;
 
 const es = new EventSource('/events');
 es.addEventListener('frame', e => { frames.push(JSON.parse(e.data)); if (frames.length > N) frames.shift(); dirty = true; });
-es.addEventListener('status', e => { status = JSON.parse(e.data); chips(); dirty = true; });
+es.addEventListener('status', e => { status = JSON.parse(e.data); rule = status.rule ?? rule; chips(); dirty = true; });
 es.addEventListener('params', e => { params = JSON.parse(e.data); paramsNote(); dirty = true; });
 es.onerror = () => { document.getElementById('cState').className = 'chip stale'; document.querySelector('#cState b').textContent = 'stream lost'; };
 
@@ -166,6 +166,14 @@ function heatmap(c, key, ramp, sens) {
       g.fillRect(x, T + r * rowH + 1, colW + 0.6, rowH - 2);
     }
   }
+  if (key === 'mg' && rule && rule.near_gates > 0) {
+    // the daemon's desk: a dashed line under the last near gate
+    const y = T + rule.near_gates * rowH;
+    g.setLineDash([4, 4]); g.strokeStyle = css('--text-primary'); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(L, y + .5); g.lineTo(w - R, y + .5); g.stroke(); g.setLineDash([]);
+    document.getElementById('ruleNote').textContent =
+      `daemon: moving ≥${rule.energy_min} in gates 0–${rule.near_gates - 1} (above the dashed line) · away after ${rule.absence_ms / 1000}s`;
+  }
   timeAxis(g, w, h);
   crosshair(g, w, h);
 }
@@ -179,8 +187,6 @@ function distChart(c) {
     g.strokeStyle = css('--line'); g.lineWidth = 1; g.beginPath(); g.moveTo(L, yOf(cm) + .5); g.lineTo(w - R, yOf(cm) + .5); g.stroke();
     g.fillStyle = css('--text-muted'); g.textAlign = 'right'; g.fillText(cm, L - 6, yOf(cm));
   }
-  g.setLineDash([4, 4]); g.strokeStyle = css('--text-secondary'); g.beginPath(); g.moveTo(L, yOf(CAP_CM) + .5); g.lineTo(w - R, yOf(CAP_CM) + .5); g.stroke(); g.setLineDash([]);
-  g.fillStyle = css('--text-muted'); g.textAlign = 'left'; g.fillText('cap ' + CAP_CM, w - R + 6, yOf(CAP_CM));
   const off = N - frames.length;
   for (const [key, col, flag] of [['st', css('--st'), 2], ['mv', css('--mv'), 1]]) {
     g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.beginPath(); let pen = false;

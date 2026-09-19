@@ -31,6 +31,7 @@ type config struct {
 	baud                                           int
 	absence, debounce, stale, alertAfter           time.Duration
 	maxDistance                                    uint
+	nearGates, energyMin                           int
 	dryRun, verbose, noMpris                       bool
 	replay                                         string
 }
@@ -47,7 +48,9 @@ func main() {
 	flag.DurationVar(&c.absence, "absence", 60*time.Second, "how long the desk must be empty before the TV goes off")
 	flag.DurationVar(&c.debounce, "debounce", 500*time.Millisecond, "how long presence must hold before the TV comes on")
 	flag.DurationVar(&c.stale, "stale", 5*time.Second, "no frames for this long -> no opinion, no actions")
-	flag.UintVar(&c.maxDistance, "max-distance", 250, "ignore targets farther than this many cm (0 = any)")
+	flag.UintVar(&c.maxDistance, "max-distance", 250, "basic frames only: ignore targets farther than this many cm (0 = any)")
+	flag.IntVar(&c.nearGates, "near-gates", 3, "engineering frames: gates (75 cm each) that count as the desk; 0 = use max-distance")
+	flag.IntVar(&c.energyMin, "energy-min", 40, "engineering frames: moving energy in a near gate that counts as presence")
 	flag.StringVar(&c.script, "script", filepath.Join(home, ".config/hypr/scripts/tv-screen.sh"), "actuator")
 	flag.StringVar(&c.stateFile, "state", filepath.Join(home, ".config/lgtv/state"), "TV state file written by the actuator")
 	flag.StringVar(&c.statusFile, "status", filepath.Join(home, ".local/state/deskpresence/status.json"), "status output for bars/chips")
@@ -72,6 +75,7 @@ func main() {
 
 	pol := &Policy{
 		Absence: c.absence, Debounce: c.debounce, MaxDistance: uint16(c.maxDistance),
+		NearGates: c.nearGates, EnergyMin: c.energyMin,
 		StaleAfter: c.stale, MinBackoff: 30 * time.Second, MaxBackoff: 10 * time.Minute,
 	}
 
@@ -111,7 +115,7 @@ func main() {
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
-	log.Printf("deskpresence up: absence=%s debounce=%s max=%dcm tv=%q dry-run=%v", c.absence, c.debounce, c.maxDistance, act.tvState(), c.dryRun)
+	log.Printf("deskpresence up: absence=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.absence, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
 
 	for {
 		select {
@@ -410,6 +414,8 @@ func alert(msg string) {
 func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool) string {
 	pr, known := p.Present()
 	s := map[string]any{
+		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
+			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance},
 		"present":   pr,
 		"known":     known,
 		"since":     p.PresentSince().UnixMilli(),
