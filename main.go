@@ -31,7 +31,7 @@ type config struct {
 	baud                                           int
 	absence, debounce, stale, alertAfter           time.Duration
 	maxDistance                                    uint
-	dryRun, verbose                                bool
+	dryRun, verbose, noMpris                       bool
 	replay                                         string
 }
 
@@ -56,6 +56,7 @@ func main() {
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
+	flag.BoolVar(&c.noMpris, "no-mpris", false, "do not pause/resume media players on leave/return")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		// flags after the subcommand: deskpresence config [-port X] show
@@ -91,6 +92,11 @@ func main() {
 	sleep := watchSleep(ctx) // nil channel when logind is unavailable
 
 	act := &actuator{script: c.script, stateFile: c.stateFile, dryRun: c.dryRun}
+	var media *mpris
+	if !c.noMpris {
+		media = newMpris()
+	}
+	var lastPresent, lastKnown bool
 	done := make(chan string, 1)
 	var (
 		lastStatus  string
@@ -150,6 +156,18 @@ func main() {
 				pol.Reset()
 			}
 		case now := <-tick.C:
+			// Media follows the debounced verdict, not the TV: pause the
+			// moment "away" latches, resume the moment "present" does.
+			if pr, known := pol.Present(); known {
+				if lastKnown && pr != lastPresent {
+					if pr {
+						media.resume()
+					} else {
+						media.pauseAll()
+					}
+				}
+				lastPresent, lastKnown = pr, true
+			}
 			if _, err := os.Stat(c.pauseFile); err == nil {
 				if !pausedNoted {
 					log.Printf("paused: %s exists, observing only", c.pauseFile)
