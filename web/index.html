@@ -197,9 +197,30 @@ function stats() {
     if (p.className !== cls) p.className = cls;
     setText(p.querySelector('.txt'), !status.sensor_ok ? 'sensor silent' : status.present ? 'present' : 'absent');
     setText(document.querySelector('#sTv .txt'), status.tv || 'unknown');
-    setText(document.querySelector('#sDist .txt'), status.distance ? status.distance + ' cm' : 'none');
   }
+  setText(document.querySelector('#sDist .txt'), closest());
   if (f) setText(document.querySelector('#sState .txt'), ['none', 'moving', 'static', 'both'][f.state] ?? String(f.state));
+}
+// Closest target, steadied: median of the last 3 s of frames, rounded to 5 cm,
+// refreshed twice a second, held until the median moves 8 cm. The raw figure
+// jitters by tens of cm at 10 Hz.
+let closestText = '\u2014', closestAt = 0, closestCM = 0;
+function closest() {
+  const now = Date.now();
+  if (now - closestAt < 500) return closestText;
+  closestAt = now;
+  const d = [];
+  for (let i = Math.max(0, frames.length - 30); i < frames.length; i++) {
+    const f = frames[i];
+    const v = f.state === 1 ? f.mv : f.state === 2 ? f.st : f.state === 3 ? (f.mv && f.mv < f.st ? f.mv : f.st) : 0;
+    if (v) d.push(v);
+  }
+  if (d.length < 15) { closestText = 'none'; closestCM = 0; return closestText; }
+  d.sort((x, y) => x - y);
+  const m = d[d.length >> 1];
+  if (!closestCM || Math.abs(m - closestCM) >= 8) closestCM = Math.round(m / 5) * 5;  // dead band: no flicker on a rounding edge
+  closestText = closestCM + ' cm';
+  return closestText;
 }
 function paramsNote() {
   if (!params || !(params.MaxGate > 0)) { setText('tParams', 'module params pending'); return; }
