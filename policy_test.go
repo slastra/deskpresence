@@ -114,7 +114,10 @@ func TestGateRule(t *testing.T) {
 
 func TestBackoffAndStale(t *testing.T) {
 	p := newTestPolicy()
-	t0 := time.Unix(1000, 0)
+	// an empty room has to earn its first verdict: Absence of quiet frames
+	t0 := time.Unix(1000, 0).Add(-p.Absence)
+	p.Observe(Frame{}, t0)
+	t0 = t0.Add(p.Absence)
 	p.Observe(Frame{}, t0)
 	if a := p.Decide("on", t0, false); a != "off" {
 		t.Fatalf("want off, got %q", a)
@@ -177,5 +180,41 @@ func TestFadeLevel(t *testing.T) {
 	}
 	if f := p.FadeLevel(t0.Add(11600 * time.Millisecond)); f != 0 {
 		t.Fatalf("back for 600ms: want 0, got %v", f)
+	}
+}
+
+func TestStartupWaitsForAVerdict(t *testing.T) {
+	p := newTestPolicy()
+	p.NearGates, p.EnergyMin = 2, 38
+	t0 := time.Unix(1000, 0)
+	quiet := Frame{State: 2, StaticCM: 145, MovingGates: []byte{30, 25, 20, 0, 0, 0, 0, 0, 0}}
+	// a still reader: 5 s of frames under threshold must not become "off"
+	for i := 0; i < 50; i++ {
+		p.Observe(quiet, t0.Add(time.Duration(i)*100*time.Millisecond))
+		if a := p.Decide("on", t0.Add(time.Duration(i)*100*time.Millisecond), false); a != "" {
+			t.Fatalf("frame %d: decided %q before any verdict", i, a)
+		}
+	}
+	if _, known := p.Present(); known {
+		t.Fatal("presence must stay unknown until earned")
+	}
+	// one breath seeds present
+	p.Observe(Frame{State: 1, MovingGates: []byte{20, 45, 0, 0, 0, 0, 0, 0, 0}}, t0.Add(5*time.Second))
+	if pr, known := p.Present(); !pr || !known {
+		t.Fatal("a frame above threshold should seed present")
+	}
+	// an empty room at start: absent after Absence, and only then
+	q := newTestPolicy()
+	q.NearGates, q.EnergyMin = 2, 38
+	for i := 0; i <= 600; i++ {
+		now := t0.Add(time.Duration(i) * 100 * time.Millisecond)
+		q.Observe(quiet, now)
+		_, known := q.Present()
+		if want := now.Sub(t0) >= q.Absence; known != want {
+			t.Fatalf("at %s known=%v want %v", now.Sub(t0), known, want)
+		}
+	}
+	if a := q.Decide("on", t0.Add(61*time.Second), false); a != "off" {
+		t.Fatalf("empty room after Absence should turn the TV off, got %q", a)
 	}
 }

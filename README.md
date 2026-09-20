@@ -206,6 +206,7 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-fade` | `5s` | start dimming this long before absence latches; 0 disables |
 | `-alert-after` | `2m` | sensor silent this long triggers the spoken and desktop alert |
 | `-script` | `~/.config/hypr/scripts/tv-screen.sh` | actuator, called with `on` or `off` |
+| `-hooks` | none | extra commands run beside the actuator, comma separated; `{}` becomes `on` or `off`, otherwise the verb is appended |
 | `-state` | `~/.config/lgtv/state` | TV state file the actuator writes |
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
 | `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act |
@@ -218,6 +219,18 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-verbose` | | log every frame |
 
 ## Integrations
+
+Anything that should follow the desk can ride on `-hooks`. This unit turns
+the office light with the TV through a local Kasa switch:
+
+```
+-hooks "python %h/Projects/Python/kasactl/kasactl.py {} 192.168.11.97"
+```
+
+Hooks run in parallel with the actuator and each other, are bounded to
+30 s, and are never retried: presence is the truth, the log says what
+failed.
+
 
 **Actuator.** Any executable taking `on` or `off`. It should serialise on its
 own lock and write the state it achieved (`on` or `off`) to the `-state`

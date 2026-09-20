@@ -41,7 +41,8 @@ type Policy struct {
 	present      bool
 	presentAt    time.Time // when the debounced verdict last flipped
 	presentKnown bool
-	lastDecision string // last action requested
+	absentSince  time.Time // start of the raw-absent run before the first verdict
+	lastDecision string    // last action requested
 	lastAttempt  time.Time
 	attempts     int // consecutive attempts of lastDecision
 }
@@ -57,15 +58,29 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	}
 	p.raw = raw
 	if !p.presentKnown {
-		// First reading seeds the debounced state immediately so a fresh start
-		// with someone in the chair does not wait out the absence timer.
-		p.present = raw
-		p.presentAt = now
-		p.presentKnown = true
+		// A first reading above threshold seeds "present" at once, so a
+		// fresh start with someone in the chair does not wait out the
+		// absence timer. A reading below it proves nothing: a still reader
+		// spends most frames under threshold (measured 2026-09-20), and
+		// seeding "absent" from one of them turned every restart into an
+		// off/on cycle. Absence has to be earned the usual way.
 		if raw {
+			p.present = true
+			p.presentAt = now
 			p.confirmedAt = now
+			p.presentKnown = true
+			p.absentSince = time.Time{}
+			return true
 		}
-		return true
+		if p.absentSince.IsZero() {
+			p.absentSince = now
+		}
+		if now.Sub(p.absentSince) >= p.Absence {
+			p.present = false
+			p.presentAt = now
+			p.presentKnown = true
+		}
+		return flipped
 	}
 	// Arrival needs a raw-present run of Debounce (a body walking in is
 	// continuous energy, so this costs nothing real). Once present, ANY frame
@@ -177,5 +192,6 @@ func (p *Policy) Reset() {
 	p.rawSince = time.Time{}
 	p.raw = false
 	p.presentKnown = false
+	p.absentSince = time.Time{}
 	p.attempts = 0
 }

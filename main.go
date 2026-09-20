@@ -27,6 +27,7 @@ import (
 
 type config struct {
 	port, script, stateFile, statusFile, pauseFile string
+	hooks                                          string
 	httpAddr                                       string
 	baud                                           int
 	absence, debounce, stale, alertAfter, fade     time.Duration
@@ -53,6 +54,7 @@ func main() {
 	flag.IntVar(&c.nearGates, "near-gates", 3, "engineering frames: gates (75 cm each) that count as the desk; 0 = use max-distance")
 	flag.IntVar(&c.energyMin, "energy-min", 40, "engineering frames: moving energy in a near gate that counts as presence")
 	flag.StringVar(&c.script, "script", filepath.Join(home, ".config/hypr/scripts/tv-screen.sh"), "actuator")
+	flag.StringVar(&c.hooks, "hooks", "", "extra commands run alongside the actuator, comma separated; {} is replaced by on|off, else it is appended (a light switch)")
 	flag.StringVar(&c.stateFile, "state", filepath.Join(home, ".config/lgtv/state"), "TV state file written by the actuator")
 	flag.StringVar(&c.statusFile, "status", filepath.Join(home, ".local/state/deskpresence/status.json"), "status output for bars/chips")
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
@@ -100,6 +102,11 @@ func main() {
 	sleep := watchSleep(ctx) // nil channel when logind is unavailable
 
 	act := &actuator{script: c.script, stateFile: c.stateFile, dryRun: c.dryRun}
+	for _, h := range strings.Split(c.hooks, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			act.hooks = append(act.hooks, h)
+		}
+	}
 	var media *mpris
 	if !c.noMpris {
 		media = newMpris()
@@ -240,8 +247,13 @@ func main() {
 
 type actuator struct {
 	script, stateFile string
-	dryRun            bool
-	busy              bool
+	// hooks run with the same on|off, in parallel with the script and each
+	// other, so a light switch answers at once instead of after the TV's
+	// wake retries. They are fire and forget: presence is the truth, and a
+	// hook that fails is logged, never retried by the policy.
+	hooks  []string
+	dryRun bool
+	busy   bool
 }
 
 func (a *actuator) tvState() string {
@@ -254,11 +266,14 @@ func (a *actuator) tvState() string {
 
 func (a *actuator) run(action string) {
 	if a.dryRun {
-		log.Printf("dry-run: would run %s %s", a.script, action)
+		log.Printf("dry-run: would run %s %s (hooks %v)", a.script, action, a.hooks)
 		_ = os.WriteFile(a.stateFile, []byte(action+"\n"), 0o644)
 		return
 	}
 	t0 := time.Now()
+	for _, h := range a.hooks {
+		go a.hook(h, action)
+	}
 	cmd := exec.Command(a.script, action)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -266,6 +281,27 @@ func (a *actuator) run(action string) {
 		return
 	}
 	log.Printf("actuator: %s ok in %s", action, time.Since(t0).Round(time.Second))
+}
+
+// hook runs one extra command through sh with a bound, so a device that
+// never answers cannot pile up goroutines behind it.
+func (a *actuator) hook(h, action string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	t0 := time.Now()
+	// "{}" in the command stands for the action; without it the action is
+	// appended (kasactl wants the verb before the address).
+	script := h + ` "$0"`
+	if strings.Contains(h, "{}") {
+		script = strings.ReplaceAll(h, "{}", `"$0"`)
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", script, action)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("hook: %s %s failed after %s: %v", h, action, time.Since(t0).Round(time.Second), err)
+		return
+	}
+	log.Printf("hook: %s %s ok in %s", h, action, time.Since(t0).Round(time.Millisecond))
 }
 
 // --- serial ---------------------------------------------------------------
