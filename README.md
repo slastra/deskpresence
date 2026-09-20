@@ -129,18 +129,23 @@ rather than guess. With the live view open:
 2. Walk out of the room for 30 s. Read the highest value the same rows reach
    with nobody there.
 3. Pick `-energy-min` between the two, closer to the empty-room number.
-4. Pick `-absence` for how long you are willing to sit frozen before the
-   screen goes dark. The moving energy of a seated person spikes every couple
-   of seconds, so 10 s is plenty.
+4. Pick `-absence` for the longest gap a still reader leaves between
+   frames above the threshold, times two. A seated person's moving energy
+   spikes every few seconds, but a four-minute recording of reading with
+   hands off the desk showed one gap of 10 s, so 10 s is not enough.
+   `-fade` starts dimming before absence latches; one breath cancels it.
 
 Measured at this desk, module about 1 m from the chair:
 
 | | Gates 0 and 1 (0 to 150 cm) | Gate 2 (150 to 225 cm) |
 |---|---|---|
-| Seated, still | peaks 100 every few seconds, mean 55 to 73 | 50 to 100 |
-| Room empty | max 30 | blips of 35 to 86 |
+| Typing | peaks 100 every few seconds, mean 55 to 73 | 50 to 100 |
+| Reading, hands off | peaks 33 to 53 every 5 s, longest gap above 38 was 10 s | |
+| Room empty | mostly under 30, single frames of 32 to 38 | blips of 35 to 86 |
 
-Which gives the unit file's `-near-gates 2 -energy-min 35 -absence 10s`.
+Which gives the unit file's `-near-gates 2 -energy-min 38 -absence 20s -fade 8s`.
+Static energy does not help here: the module reports none for gates 0 and
+1, and gates 2 and 3 read 100 with the room empty.
 The third gate was in the rule at first; it turned out to carry energy from
 beyond the desk (a body in the next room reads through drywall), and one
 walk-away test kept the TV on for a full minute because of it. Keep the
