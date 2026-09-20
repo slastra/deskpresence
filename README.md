@@ -1,71 +1,229 @@
 # deskpresence
 
 Turns the TV off when nobody is at the desk and back on the moment someone
-is. Driven by an LD2410C 24 GHz mmWave presence sensor on a CP2102 USB UART.
-Replaces swayidle blanking: idle inhibitors, keyboard activity and playing
-video are irrelevant, only bodies count.
+is. A 24 GHz mmWave presence sensor (Hi-Link LD2410C) on a USB UART feeds a
+small Go daemon that keeps one invariant:
 
-## Invariant
+    TV on  <=>  someone within reach of the sensor
 
-    TV on  <=>  someone within max-distance of the sensor
+It replaces idle blanking. Keyboard activity, idle inhibitors and playing
+video are irrelevant. Only bodies count, so a film keeps playing while you
+watch it and the screen goes dark seconds after you walk away, even if a
+download is still running.
 
-"Someone" is, in engineering mode, moving energy of at least `-energy-min`
-in any of the first `-near-gates` gates (75 cm each). The module's own
-summary distance smears ~80 cm past a seated body and its stationary channel
-is blind inside 150 cm and saturated by the room beyond it, so neither is
-used. Basic frames (no gate data) fall back to target-within-`-max-distance`.
-Debounced by `-debounce` (500 ms) on the way in and `-absence` on the way
-out. Single-frame blips neither count as presence nor restart the absence
-clock. When the sensor is silent for `-stale` (5 s) the daemon holds.
+The daemon also fades PipeWire audio and pauses MPRIS players on the way
+out, resumes them on the way back, and serves a live view of the sensor at
+http://127.0.0.1:7391 for tuning.
 
-Measured at this desk (2026-09-18): sitting still, near-gate moving energy
-peaks above 35 at least every 2.4 s; with the room empty it never exceeds 26.
-The unit therefore runs `-energy-min 35 -absence 10s`.
+![live view](docs/live-view.png)
 
-The actuator is `~/.config/hypr/scripts/tv-screen.sh on|off`, which
-serialises on its own lock and writes the state it achieved to
-`~/.config/lgtv/state`. The daemon compares desk and TV state every 250 ms
-and acts whenever they disagree, with 30 s → 10 min backoff for a failing
-actuator.
+## How it works
 
-Suspend: a logind delay inhibitor is held; on `PrepareForSleep` the TV is
-powered off before the machine sleeps, and after resume the policy resets and
-lets the sensor decide.
+The LD2410C reports ten times a second. In engineering mode each report
+carries a moving-energy and a static-energy value (0 to 100) for each of nine
+range gates, 75 cm apart. The daemon reads only the moving energy of the
+first few gates, the ones that cover the chair:
 
-## Wiring
+- **Present** when moving energy in any of the first `-near-gates` gates is at
+  least `-energy-min`, held for `-debounce` (500 ms) before the TV comes on.
+- **Absent** when that has not been true for `-absence`. Single-frame blips
+  neither count as presence nor restart the absence clock.
+- **No opinion** when the sensor has been silent for `-stale` (5 s). The daemon
+  holds whatever state it is in.
 
-    CP2102 5V  -> LD2410C VCC
-    CP2102 GND -> LD2410C GND
-    CP2102 TXD -> LD2410C RX
-    CP2102 RXD -> LD2410C TX
+Why not the module's own presence output or its summary distance? The
+summary distance smears about 80 cm past a seated body, the static channel
+is blind inside 150 cm and saturated by the room beyond it, and the module's
+built-in verdict flickers. Per-gate moving energy at the chair is the one
+signal that separates a person sitting still from an empty room. Basic
+frames (no gate data) fall back to "target within `-max-distance`".
 
-256000 baud 8N1, the module default. Antenna patches face the chair.
+The actuator is any script that takes `on` or `off`. The daemon compares the
+desk state with the TV state file every 250 ms and acts whenever they
+disagree, with a 30 s to 10 min backoff for a failing actuator. It is
+level-triggered: if something else turns the TV off while you are reading,
+it comes back on within a few seconds.
 
-## Run
+Around the edges:
+
+- `-fade` (5 s) dims the screen and PipeWire streams before absence latches,
+  so the cut is not a surprise. Streams listed in `-audio-exclude` are left
+  alone. Volumes are remembered by application and restored on return.
+- MPRIS players are paused on leave and resumed on return (`-no-mpris` to
+  disable).
+- A logind delay inhibitor turns the TV off before suspend. After resume the
+  policy resets and the sensor decides again.
+- A dead sensor is the dangerous case on an OLED, because nothing blanks it.
+  After `-alert-after` (2 min) of silence the daemon speaks and posts a
+  critical notification, then repeats hourly. A sensor that has never been
+  seen since start does not alert, so the unit can sit enabled before the
+  hardware is plugged in.
+
+## Parts
+
+| Part | Notes |
+|---|---|
+| Hi-Link LD2410C | 24 GHz mmWave, 5 V, UART at 256000 baud. The C variant has the 1.27 mm 5-pin header. |
+| CP2102 USB to UART bridge | Needs a 5 V pin, not just 3.3 V. Any CP210x board works; the default `-port` glob matches it. |
+| Four short leads | Enamelled speaker wire works and doubles as the mount. |
+| Heat-shrink | For the two leads that cross. See assembly. |
+| Optional 1.27 mm header | If you would rather not solder leads to the module. |
+
+The module has no reverse-polarity protection. Check VCC and GND twice.
+
+## Assembly
+
+1. **Solder to the module.** The 5-pin edge is VCC, GND, OUT, RX, TX. OUT is
+   the module's own presence pin and is not used. Solder either a header or
+   four leads directly to VCC, GND, RX and TX.
+2. **Cross the data lines.** UART is crossed: the bridge's transmit goes to
+   the module's receive.
+
+        CP2102 5V  -> LD2410C VCC
+        CP2102 GND -> LD2410C GND
+        CP2102 TXD -> LD2410C RX
+        CP2102 RXD -> LD2410C TX
+
+3. **Insulate the crossing.** With enamelled wire, RX and TX cross each other
+   with nothing but enamel between them. Slip heat-shrink over each of those
+   two leads before you bend anything into place. A bare crossing works until
+   the enamel wears through, then the port goes silent for no visible reason.
+4. **Power from 5 V.** The module regulates its own 3.3 V. Feeding it 3.3 V
+   directly gives erratic frames or none.
+5. **Mount and aim.** Stiff wire is enough to hold the module; a housing is
+   not needed. The antenna patches (the flat side without components) face
+   the chair, roughly at seat height and within 150 cm of it. Do not point it
+   down a hallway or at a door.
+6. **Plug in.** The bridge appears as
+   `/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_*`.
+   On Arch, add yourself to `uucp` if you get permission denied:
+
+        sudo usermod -aG uucp $USER
+
+## First run
 
     go install .
+    deskpresence -verbose            # print every frame
+    deskpresence config show         # module parameters (daemon must be stopped)
+
+Open http://127.0.0.1:7391 for the live view: two heatmaps (moving and
+static energy by gate over the last 120 s), the reported distance, and a
+band showing the sensor's own state against the daemon's verdict. The
+dashed line on the moving heatmap is the daemon's near-gate boundary.
+Hover anywhere for that frame's numbers, with the gate under the pointer
+highlighted:
+
+![hover card](docs/hover.png)
+
+The module ships in basic mode. `deskpresence` switches it to engineering
+mode on connect, so the gate data appears within a second.
+
+## Calibration
+
+Thresholds depend on the chair, the distance and the room, so measure
+rather than guess. With the live view open:
+
+1. Sit still for a minute. Read the highest moving energy in the near gates
+   (the rows above the dashed line). Breathing and small movements keep it
+   well above zero.
+2. Walk out of the room for 30 s. Read the highest value the same rows reach
+   with nobody there.
+3. Pick `-energy-min` between the two, closer to the empty-room number.
+4. Pick `-absence` for how long you are willing to sit frozen before the
+   screen goes dark. The moving energy of a seated person spikes every couple
+   of seconds, so 10 s is plenty.
+
+Measured at this desk, module about 1 m from the chair:
+
+| | Near-gate moving energy |
+|---|---|
+| Seated, still | peaks 70 to 100 at least every 2.4 s |
+| Room empty | max 27, mean 19 |
+
+Which gives the unit file's `-near-gates 3 -energy-min 35 -absence 10s`.
+
+If a gate beyond the chair picks up the room (a fan, a corridor), lower its
+sensitivity in the module rather than widening the daemon's rule:
+
+    deskpresence config sens <gate|all> <movingSens> <staticSens>
+    deskpresence config gates <maxMovingGate> <maxStaticGate> <unmannedSeconds>
+    deskpresence config factory
+
+A sensitivity of 100 disables a gate. Settings persist in the module.
+
+## Run as a service
+
+    install -Dm644 systemd/deskpresence.service -t ~/.config/systemd/user/
     systemctl --user enable --now deskpresence
 
-    deskpresence -verbose                     # watch frames
+Edit the `ExecStart` flags in the unit to your calibrated values. While
+tuning:
+
+    touch $XDG_RUNTIME_DIR/deskpresence.pause    # observe only, never act
     deskpresence -dry-run -replay present:5s,absent:70s,present:3s -absence 60s
-    touch $XDG_RUNTIME_DIR/deskpresence.pause # observe only, never act
     cat ~/.local/state/deskpresence/status.json
+    journalctl --user -u deskpresence -f
 
-## Sensor failure
+`status.json` is rewritten on every change and is what a bar or chip reads:
 
-The point of this is the OLED. A dead sensor (unplugged, wedged) means
-nothing blanks it, so after `-alert-after` (2 min) of silence the daemon
-speaks and posts a critical notification, then repeats hourly. A sensor
-that has never been seen since the daemon started does not alert, so the
-unit can sit enabled before the hardware arrives.
+    rule       near_gates, energy_min, absence_ms, max_distance
+    present    the daemon's verdict
+    known      false until the first frame
+    since      ms timestamp of the last verdict change
+    fade       0 to 1, how far into the pre-absence dim
+    sensor_ok  false when frames have stopped
+    tv         on, off, or "" when the state file is missing
+    busy       actuator running
+    paused     pause file present
+    state      the sensor's own target state (0 none, 1 moving, 2 static, 3 both)
+    distance   the sensor's summary distance in cm
 
-## Cutover from swayidle
+`history.json` beside it holds the last 60 s at 2 Hz: `near[]` (max
+near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 
-Once a day of `journalctl --user -u deskpresence` shows clean on/off pairs,
-swayidle stops being the primary. Recommended end state is not to delete it
-but to demote it: change the timeout in `~/.config/hypr/idle.sh` from 600 to
-1800 so it is a last-resort burn-in guard if this daemon or the sensor dies.
-If it fires while someone is reading, this daemon turns the TV back on within
-a few seconds (level-triggered, not edge). Before-sleep/after-resume hooks can
-stay, they never fire on a machine that does not suspend. Until the cutover
-both run at full strength; the state file makes the double `off` harmless.
+## Flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-port` | `/dev/serial/by-id/*CP210*` | serial device, glob allowed |
+| `-baud` | `256000` | the module default |
+| `-near-gates` | `3` | gates (75 cm each) that count as the desk; 0 uses `-max-distance` |
+| `-energy-min` | `40` | moving energy in a near gate that counts as presence |
+| `-max-distance` | `250` | basic frames only: ignore targets farther than this (cm) |
+| `-debounce` | `500ms` | presence must hold this long before the TV comes on |
+| `-absence` | `60s` | desk must be empty this long before the TV goes off |
+| `-stale` | `5s` | no frames for this long means no opinion |
+| `-fade` | `5s` | start dimming this long before absence latches; 0 disables |
+| `-alert-after` | `2m` | sensor silent this long triggers the spoken and desktop alert |
+| `-script` | `~/.config/hypr/scripts/tv-screen.sh` | actuator, called with `on` or `off` |
+| `-state` | `~/.config/lgtv/state` | TV state file the actuator writes |
+| `-status` | `~/.local/state/deskpresence/status.json` | status output |
+| `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act |
+| `-http` | `127.0.0.1:7391` | live view address; empty disables |
+| `-no-audio-fade` | | leave PipeWire streams alone |
+| `-audio-exclude` | `emotune,speech-dispatcher` | application names never faded |
+| `-no-mpris` | | do not pause or resume players |
+| `-dry-run` | | log actions instead of running the actuator |
+| `-replay` | | synthesise frames, e.g. `present:5s,absent:70s` |
+| `-verbose` | | log every frame |
+
+## Integrations
+
+**Actuator.** Any executable taking `on` or `off`. It should serialise on its
+own lock and write the state it achieved (`on` or `off`) to the `-state`
+file, because the daemon trusts that file rather than remembering what it
+asked for. The bundled default is an LG webOS script that talks to the TV
+over its API, which avoids DPMS entirely (an NVIDIA FRL link that loses a
+modeset race stays at 60 Hz until reboot).
+
+**Bars and chips.** Read `status.json`. It changes only when something
+changed, so polling it once a second is cheap.
+
+**Idle daemons.** Keep swayidle or similar as a last-resort burn-in guard
+with a long timeout rather than removing it. If it fires while someone is
+reading, this daemon turns the TV back on within a few seconds. The state
+file makes a double `off` harmless.
+
+## Licence
+
+MIT.

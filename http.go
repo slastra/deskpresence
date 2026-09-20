@@ -28,6 +28,9 @@ func (h *hub) publish(kind string, v any) {
 	msg := fmt.Sprintf("event: %s\ndata: %s\n\n", kind, b)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if kind == "status" {
+		h.status = msg // replayed to new subscribers, which otherwise wait for the next change
+	}
 	for ch := range h.subs {
 		select {
 		case ch <- msg:
@@ -69,6 +72,7 @@ func (h *hub) serve(addr string) {
 		h.mu.Lock()
 		h.subs[ch] = struct{}{}
 		p := h.params
+		st := h.status
 		h.mu.Unlock()
 		defer func() {
 			h.mu.Lock()
@@ -77,6 +81,7 @@ func (h *hub) serve(addr string) {
 		}()
 		b, _ := json.Marshal(p)
 		fmt.Fprintf(w, "event: params\ndata: %s\n\n", b)
+		fmt.Fprint(w, st)
 		fl.Flush()
 		keep := time.NewTicker(15 * time.Second)
 		defer keep.Stop()

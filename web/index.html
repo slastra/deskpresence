@@ -5,63 +5,117 @@
 <style>
   :root {
     color-scheme: dark;
-    --surface-0: #111110;
-    --surface-1: #1a1a19;
-    --surface-2: #242423;
-    --line: #383835;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #8a8980;
-    --mv: #d95926;   /* moving = orange */
-    --st: #3987e5;   /* static = blue */
-    --good: #0ca30c;
-    --warning: #fab219;
-    --critical: #d03b3b;
+    /* Rosé Pine (main) */
+    --base: #191724; --surface: #1f1d2e; --overlay: #26233a;
+    --hl-low: #21202e; --hl-med: #403d52; --hl-high: #524f67;
+    --text: #e0def4; --subtle: #908caa; --muted: #6e6a86;
+    --love: #eb6f92; --gold: #f6c177; --rose: #ebbcba; --pine: #31748f; --foam: #9ccfd8; --iris: #c4a7e7;
+    /* semantic */
+    --surface-0: var(--base); --surface-1: var(--surface); --surface-2: var(--overlay);
+    --line: var(--hl-med);
+    --text-primary: var(--text); --text-secondary: var(--subtle); --text-muted: var(--muted);
+    --mv: var(--gold);      /* moving series */
+    --st: var(--foam);      /* static series */
+    --both: var(--iris);    /* sensor reports moving + static */
+    --good: var(--pine);    /* daemon: present (status, kept apart from the foam series) */
+    --critical: var(--love);
+    --radius: 8px;
+    --ease: cubic-bezier(.2, .7, .2, 1);
     --mono: "ShureTechMono Nerd Font", ui-monospace, Menlo, monospace;
   }
-  html, body { margin: 0; background: var(--surface-0); color: var(--text-primary);
-    font: 14px/1.4 system-ui, sans-serif; }
-  body { padding: 16px 20px 32px; max-width: 1400px; margin: 0 auto; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; margin-bottom: 14px; }
-  h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .02em; }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
-    background: var(--surface-2); color: var(--text-secondary); font-family: var(--mono); font-size: 13px; }
-  .chip b { color: var(--text-primary); font-weight: 600; }
-  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
-  .chip.present .dot { background: var(--good); }
-  .chip.absent .dot { background: var(--text-muted); }
-  .chip.stale .dot { background: var(--critical); }
-  .panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px;
+  html, body { margin: 0; background: var(--surface-0); color: var(--text-primary); font: 14px/1.4 system-ui, sans-serif; }
+  body { padding: 18px 20px 36px; max-width: 1400px; margin: 0 auto; min-height: 100vh; box-sizing: border-box;
+    background:
+      radial-gradient(900px 420px at 0% -10%, rgba(156, 207, 216, .07), transparent 70%),
+      radial-gradient(900px 520px at 100% 110%, rgba(196, 167, 231, .07), transparent 70%),
+      var(--surface-0); }
+
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; margin-bottom: 14px; }
+  .title { display: flex; flex-direction: column; gap: 2px; }
+  h1 { font: 600 18px/1.2 var(--mono); margin: 0; letter-spacing: .04em; }
+  h1::before { content: ""; display: inline-block; width: 8px; height: 8px; margin: 0 8px 1px 0; background: var(--iris); transform: rotate(45deg); }
+  .title .sub { color: var(--text-muted); font-size: 12px; }
+  #streamNote { color: var(--critical); }
+
+  /* fixed-width stat cards: the row must never move as values change */
+  .stats { margin-left: auto; display: flex; flex-wrap: nowrap; gap: 8px; }
+  .stat { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 6px 12px;
+    background: var(--overlay); border: 1px solid var(--line); border-radius: var(--radius); }
+  .stat .label { font: 11px/1.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+  .stat .v { display: flex; align-items: center; gap: 6px; width: var(--w); white-space: nowrap;
+    font: 600 16px/1.2 var(--mono); color: var(--text-primary); }
+  .stat-presence .v { --w: calc(13ch + 14px); }  /* "sensor silent" + 8px dot + 6px gap */
+  .stat-tv       .v { --w: 7ch; }                /* "unknown" */
+  .stat-dist     .v { --w: 6ch; }                /* "999 cm" */
+  .stat-state    .v { --w: 6ch; }                /* "moving" / "static" */
+  .stat .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); transition: background .3s var(--ease); }
+  .stat.present .dot { background: var(--good); box-shadow: 0 0 8px rgba(49, 116, 143, .9); }
+  .stat.absent .dot { background: var(--text-muted); }
+  .stat.stale .dot { background: var(--critical); }
+
+  .panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 12px 14px 10px; margin-bottom: 12px; }
-  .panel h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 0 0 8px;
-    text-transform: uppercase; letter-spacing: .06em; display: flex; gap: 14px; align-items: baseline; }
+  .panel h2 { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: 0 0 8px;
+    text-transform: uppercase; letter-spacing: .08em; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
   .panel h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
-  .legend { margin-left: auto; display: flex; gap: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .legend { margin-left: auto; display: flex; gap: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
   .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .legend i.sq { width: 10px; height: 10px; border-radius: 2px; }
   .ramp { display: inline-block; width: 90px; height: 8px; border-radius: 2px; vertical-align: middle; margin: 0 6px; }
-  canvas { display: block; width: 100%; height: 200px; }
-  #dist { height: 170px; } #band { height: 34px; margin-top: 6px; }
+
+  canvas { display: block; width: 100%; height: 200px; transition: opacity .5s var(--ease); }
+  #dist { height: 170px; } #band { height: 44px; margin-top: 6px; }
   .wrap { position: relative; }
-  #tip { position: absolute; pointer-events: none; display: none; background: var(--surface-2);
-    border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font-family: var(--mono);
-    font-size: 12px; color: var(--text-secondary); white-space: pre; z-index: 2; }
-  table { border-collapse: collapse; font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
-  td, th { padding: 2px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+  .wrap.stale canvas { opacity: .45; }
+  .wrap.stale #tip { display: none !important; }
+  #tip { position: absolute; pointer-events: none; display: none; width: 284px; box-sizing: border-box; background: var(--surface-2);
+    border: 1px solid var(--hl-high); border-radius: var(--radius); padding: 9px 12px 7px; font-family: var(--mono);
+    font-size: 12px; color: var(--text-secondary); z-index: 2; box-shadow: 0 10px 28px rgba(0, 0, 0, .45); }
+  .tip-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; white-space: nowrap; }
+  .tip-head .ago { color: var(--text-primary); font-weight: 600; }
+  .tip-head .state { display: inline-flex; align-items: center; gap: 5px; }
+  .tip-head .state i { width: 8px; height: 8px; border-radius: 2px; }
+  .tip-head .gate { margin-left: auto; color: var(--text-muted); }
+  .tip-grid { display: grid; grid-template-columns: 7ch 1fr 4ch; column-gap: 12px; row-gap: 1px; }
+  .tip-grid .k { color: var(--text-muted); }
+  .tip-grid .v { text-align: right; color: var(--text-primary); }
+  .tip-grid .e { text-align: right; }
+  .tip-gates { width: 100%; border-collapse: collapse; margin-top: 7px; font-size: 11px; table-layout: auto; }
+  .tip-gates th, .tip-gates td { padding: 1px 4px; border: 0; width: auto; min-width: 0; line-height: 1.3; }
+  .tip-gates th { color: var(--text-muted); font-weight: 400; text-align: right; }
+  .tip-gates th:first-child, .tip-gates td:first-child { text-align: left; color: var(--text-muted); width: 5ch; }
+  .tip-gates td.bar { position: relative; width: 76px; text-align: right; }
+  .tip-gates td.bar i { position: absolute; left: 4px; right: 4px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--hl-med); }
+  .tip-gates td.bar i b { display: block; height: 100%; border-radius: 1px; }
+  .tip-gates td.bar.mv i b { background: var(--mv); } .tip-gates td.bar.st i b { background: var(--st); }
+  .tip-gates td.over { color: var(--text-primary); font-weight: 600; }
+  .tip-gates tr.hl td { background: var(--hl-low); color: var(--text-primary); }
+  .tip-gates tr.hl td:first-child { color: var(--text-primary); }
+
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-family: var(--mono); font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  td, th { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--line); }
   th { color: var(--text-muted); font-weight: 400; }
-  td:first-child, th:first-child { text-align: left; }
+  td:first-child, th:first-child { text-align: left; width: 12ch; }
   td.over { color: var(--text-primary); font-weight: 600; }
   .note { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .stat, .panel { animation: rise .35s var(--ease) both; }
+  .stat:nth-child(2) { animation-delay: .04s; } .stat:nth-child(3) { animation-delay: .08s; } .stat:nth-child(4) { animation-delay: .12s; }
+  .wrap .panel:nth-of-type(2) { animation-delay: .08s; } .wrap .panel:nth-of-type(3) { animation-delay: .16s; } body > .panel { animation-delay: .24s; }
+  @media (prefers-reduced-motion: reduce) { .stat, .panel, canvas, .stat .dot { animation: none; transition: none; } }
 </style>
 
 <header>
-  <h1>deskpresence</h1>
-  <span class="sub" style="color:var(--text-muted)">LD2410C · engineering mode · last 120 s</span>
-  <div class="chips">
-    <span class="chip" id="cPresent"><span class="dot"></span><b>—</b></span>
-    <span class="chip" id="cTv">tv <b>—</b></span>
-    <span class="chip" id="cDist">closest <b>—</b></span>
-    <span class="chip" id="cState">sensor <b>—</b></span>
+  <div class="title">
+    <h1>deskpresence</h1>
+    <span class="sub">LD2410C · engineering mode · last 120 s <span id="streamNote"></span></span>
+  </div>
+  <div class="stats">
+    <div class="stat stat-presence" id="sPresent"><span class="label">presence</span><span class="v"><span class="dot"></span><span class="txt">—</span></span></div>
+    <div class="stat stat-tv" id="sTv"><span class="label">tv</span><span class="v"><span class="txt">—</span></span></div>
+    <div class="stat stat-dist" id="sDist"><span class="label">closest</span><span class="v"><span class="txt">—</span></span></div>
+    <div class="stat stat-state" id="sState"><span class="label">sensor</span><span class="v"><span class="txt">—</span></span></div>
   </div>
 </header>
 
@@ -76,10 +130,15 @@
   </div>
   <div class="panel">
     <h2>Reported distance
-      <span class="legend"><span><i style="background:var(--mv)"></i>moving</span><span><i style="background:var(--st)"></i>static</span></span>
+      <span class="legend">
+        <span><i style="background:var(--mv)"></i>moving</span>
+        <span><i style="background:var(--st)"></i>static</span>
+        <span><i class="sq" style="background:var(--both)"></i>both</span>
+        <span><i class="sq" style="background:var(--good)"></i>present</span>
+      </span>
     </h2>
     <canvas id="dist" height="170"></canvas>
-    <canvas id="band" height="34"></canvas>
+    <canvas id="band" height="44"></canvas>
     <div class="note">The module's summary distance smears ~80 cm past a seated body and is shown for reference only. Band: top row is the sensor's own target state (moving / static / both), bottom row is the daemon's verdict.</div>
   </div>
   <div id="tip"></div>
@@ -93,12 +152,15 @@
 <script>
 const N = 1200;                      // 120 s at 10 Hz
 const GATE_CM = 75;
+const DEFAULT_GATES = 9;
 let rule = null;                     // daemon's presence rule, from status
 const css = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
+const $ = id => document.getElementById(id);
+function setText(el, s) { if (typeof el === 'string') el = $(el); if (el.textContent !== s) el.textContent = s; }
 
-// Sequential ramps, dark-mode: near-zero recedes toward the surface, high is bright.
-const RAMP_ST = ['#1a1a19','#0d366b','#104281','#184f95','#1c5cab','#256abf','#2a78d6','#3987e5','#5598e7','#6da7ec','#86b6ef','#9ec5f4','#b7d3f6','#cde2fb'];
-const RAMP_MV = ['#1a1a19','#3a1a0c','#4e2310','#652d14','#7d3718','#96421c','#b04a1f','#c85223','#d95926','#e2733f','#e98c5f','#f0a682','#f6c1a6','#fbdccb'];
+// Single-hue sequential ramps: stop 0 is the surface, stops 1-13 are constant-hue OKLCH toward the accent.
+const RAMP_MV = ['#1f1d2e','#39270b','#483210','#573d16','#65491e','#755526','#84612f','#946e38','#a47b42','#b4894c','#c49656','#d4a461','#e5b36c','#f6c177']; // gold
+const RAMP_ST = ['#1f1d2e','#112f34','#1a3b41','#25474d','#2f545a','#3a6067','#456d74','#517b82','#5d8890','#69969e','#75a4ac','#82b2ba','#8fc0c9','#9ccfd8']; // foam
 function rampColor(ramp, v) {        // v 0..100 -> interpolated hex
   const x = Math.max(0, Math.min(100, v)) / 100 * (ramp.length - 1);
   const i = Math.floor(x), t = x - i;
@@ -107,32 +169,47 @@ function rampColor(ramp, v) {        // v 0..100 -> interpolated hex
   return `rgb(${c(1)},${c(3)},${c(5)})`;
 }
 for (const [id, r] of [['rampMv', RAMP_MV], ['rampSt', RAMP_ST]])
-  document.getElementById(id).style.background = `linear-gradient(90deg, ${r.join(',')})`;
+  $(id).style.background = `linear-gradient(90deg, ${r.join(',')})`;
 
 const frames = [];                   // ring of last N frames
-let params = null, status = null, hoverX = null, dirty = true;
+let params = null, status = null, hoverX = null, hoverRow = null, dirty = true;
+let lastFrameAt = Date.now(), streamLost = false, wasStale = false;
 
 const es = new EventSource('/events');
-es.addEventListener('frame', e => { frames.push(JSON.parse(e.data)); if (frames.length > N) frames.shift(); dirty = true; });
-es.addEventListener('status', e => { status = JSON.parse(e.data); rule = status.rule ?? rule; chips(); dirty = true; });
+es.addEventListener('frame', e => { frames.push(JSON.parse(e.data)); if (frames.length > N) frames.shift(); lastFrameAt = Date.now(); dirty = true; });
+es.addEventListener('status', e => { status = JSON.parse(e.data); rule = status.rule ?? rule; stats(); dirty = true; });
 es.addEventListener('params', e => { params = JSON.parse(e.data); paramsNote(); dirty = true; });
-es.onerror = () => { document.getElementById('cState').className = 'chip stale'; document.querySelector('#cState b').textContent = 'stream lost'; };
+es.onerror = () => { streamLost = true; };
+es.onopen = () => { streamLost = false; };
 
-function chips() {
+// MaxGate is the module's last gate index; replay/dry-run publishes a zero struct.
+function gateCount() {
+  if (params && params.MaxGate > 0) return params.MaxGate + 1;
   const f = frames[frames.length - 1];
-  const p = document.getElementById('cPresent');
+  return f?.mg?.length || DEFAULT_GATES;
+}
+
+function stats() {
+  const f = frames[frames.length - 1];
   if (status) {
-    p.className = 'chip ' + (!status.sensor_ok ? 'stale' : status.present ? 'present' : 'absent');
-    p.querySelector('b').textContent = !status.sensor_ok ? 'sensor silent' : status.present ? 'present' : 'absent';
-    document.querySelector('#cTv b').textContent = status.tv || 'unknown';
-    document.querySelector('#cDist b').textContent = status.distance ? status.distance + ' cm' : 'none';
+    const p = $('sPresent');
+    const cls = 'stat stat-presence ' + (!status.sensor_ok ? 'stale' : status.present ? 'present' : 'absent');
+    if (p.className !== cls) p.className = cls;
+    setText(p.querySelector('.txt'), !status.sensor_ok ? 'sensor silent' : status.present ? 'present' : 'absent');
+    setText(document.querySelector('#sTv .txt'), status.tv || 'unknown');
+    setText(document.querySelector('#sDist .txt'), status.distance ? status.distance + ' cm' : 'none');
   }
-  if (f) document.querySelector('#cState b').textContent = ['none', 'moving', 'static', 'both'][f.state] ?? f.state;
+  if (f) setText(document.querySelector('#sState .txt'), ['none', 'moving', 'static', 'both'][f.state] ?? String(f.state));
 }
 function paramsNote() {
-  if (!params) return;
-  document.getElementById('tParams').textContent =
-    `module: moving to gate ${params.MaxMoving} · static to gate ${params.MaxStatic} · unmanned ${params.UnmannedSeconds}s`;
+  if (!params || !(params.MaxGate > 0)) { setText('tParams', 'module params pending'); return; }
+  setText('tParams', `module: moving to gate ${params.MaxMoving} · static to gate ${params.MaxStatic} · unmanned ${params.UnmannedSeconds}s`);
+}
+function setStale(on, note) {
+  if (on === wasStale && (!on || $('streamNote').textContent === note)) return;
+  wasStale = on;
+  wrap.classList.toggle('stale', on);
+  setText('streamNote', on ? '· ' + note : '');
 }
 
 // ---- drawing ------------------------------------------------------------
@@ -144,52 +221,61 @@ function setup(c) {
   return [g, w, h];
 }
 const xOf = (i, w) => L + (i / (N - 1)) * (w - L - R);
+const TICKS = [0, 20, 40, 60, 80, 100, 120];   // seconds ago
 
-function heatmap(c, key, ramp, sens) {
+function heatmap(c, key, ramp, sens, G) {
   const [g, w, h] = setup(c);
   g.clearRect(0, 0, w, h);
-  const gates = 9, rowH = (h - T - B) / gates, colW = (w - L - R) / (N - 1);
+  const rowH = (h - T - B) / G, colW = (w - L - R) / (N - 1);
   g.font = '11px ' + css('--mono'); g.textBaseline = 'middle';
-  for (let r = 0; r < gates; r++) {
+  for (let r = 0; r < G; r++) {
     const y = T + r * rowH;
     g.fillStyle = css('--text-muted'); g.textAlign = 'right';
     g.fillText(`${r * GATE_CM}`, L - 6, y + rowH / 2);
-    g.textAlign = 'left';
-    if (sens) { g.fillStyle = sens[r] >= 100 ? css('--text-muted') : css('--text-secondary'); g.fillText(sens[r] >= 100 ? 'off' : '≥' + sens[r], w - R + 6, y + rowH / 2); }
+    if (sens && sens[r] != null) {
+      const off = sens[r] >= 100;
+      g.fillStyle = off ? css('--text-muted') : css('--text-secondary');
+      g.fillText(off ? 'off' : '≥' + sens[r], w - 6, y + rowH / 2);
+    }
   }
   const off = N - frames.length;
   for (let i = 0; i < frames.length; i++) {
     const e = frames[i][key]; if (!e) continue;
     const x = xOf(off + i, w);
-    for (let r = 0; r < gates && r < e.length; r++) {
+    for (let r = 0; r < G && r < e.length; r++) {
       g.fillStyle = rampColor(ramp, e[r]);
       g.fillRect(x, T + r * rowH + 1, colW + 0.6, rowH - 2);
     }
   }
+  if (hoverRow && hoverRow.key === key) {
+    g.strokeStyle = css('--text-secondary'); g.lineWidth = 1;
+    g.strokeRect(L + .5, T + hoverRow.r * rowH + .5, w - L - R - 1, rowH - 1);
+  }
   if (key === 'mg' && rule && rule.near_gates > 0) {
-    // the daemon's desk: a dashed line under the last near gate
+    // the daemon's desk: the one real threshold, so the one dashed line
     const y = T + rule.near_gates * rowH;
     g.setLineDash([4, 4]); g.strokeStyle = css('--text-primary'); g.lineWidth = 1;
     g.beginPath(); g.moveTo(L, y + .5); g.lineTo(w - R, y + .5); g.stroke(); g.setLineDash([]);
-    document.getElementById('ruleNote').textContent =
-      `daemon: moving ≥${rule.energy_min} in gates 0–${rule.near_gates - 1} (above the dashed line) · away after ${rule.absence_ms / 1000}s`;
+    setText('ruleNote', `daemon: moving ≥${rule.energy_min} in gates 0–${rule.near_gates - 1} (above the dashed line) · away after ${rule.absence_ms / 1000}s`);
   }
   timeAxis(g, w, h);
   crosshair(g, w, h);
 }
 
-function distChart(c) {
+function distChart(c, maxCM) {
   const [g, w, h] = setup(c);
   g.clearRect(0, 0, w, h);
-  const maxCM = 675, yOf = cm => T + (1 - Math.min(cm, maxCM) / maxCM) * (h - T - B);
+  const yOf = cm => T + (1 - Math.min(cm, maxCM) / maxCM) * (h - T - B);
   g.font = '11px ' + css('--mono'); g.textBaseline = 'middle';
-  for (const cm of [0, 150, 300, 450, 600]) {
-    g.strokeStyle = css('--line'); g.lineWidth = 1; g.beginPath(); g.moveTo(L, yOf(cm) + .5); g.lineTo(w - R, yOf(cm) + .5); g.stroke();
+  g.strokeStyle = css('--line'); g.lineWidth = 1;
+  for (const s of TICKS) { const x = Math.round(xOf(N - 1 - s * 10, w)) + .5; g.beginPath(); g.moveTo(x, T); g.lineTo(x, h - B); g.stroke(); }
+  for (let cm = 0; cm <= maxCM - GATE_CM; cm += 2 * GATE_CM) {
+    g.strokeStyle = css('--line'); g.beginPath(); g.moveTo(L, yOf(cm) + .5); g.lineTo(w - R, yOf(cm) + .5); g.stroke();
     g.fillStyle = css('--text-muted'); g.textAlign = 'right'; g.fillText(cm, L - 6, yOf(cm));
   }
   const off = N - frames.length;
   for (const [key, col, flag] of [['st', css('--st'), 2], ['mv', css('--mv'), 1]]) {
-    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.beginPath(); let pen = false;
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath(); let pen = false;
     for (let i = 0; i < frames.length; i++) {
       const f = frames[i], on = (f.state & flag) !== 0;
       if (!on) { pen = false; continue; }
@@ -205,70 +291,102 @@ function distChart(c) {
 function bandChart(c) {
   const [g, w, h] = setup(c);
   g.clearRect(0, 0, w, h);
-  const off = N - frames.length, colW = (w - L - R) / (N - 1), rowH = (h - 4) / 2;
-  g.font = '10px ' + css('--mono'); g.textBaseline = 'middle'; g.textAlign = 'right'; g.fillStyle = css('--text-muted');
-  g.fillText('sensor', L - 6, rowH / 2); g.fillText('daemon', L - 6, rowH + 4 + rowH / 2);
+  const gap = 6, off = N - frames.length, colW = (w - L - R) / (N - 1), rowH = (h - gap) / 2;
+  const cols = [css('--surface-2'), css('--mv'), css('--st'), css('--both')];
+  g.font = '11px ' + css('--mono'); g.textBaseline = 'middle'; g.textAlign = 'right'; g.fillStyle = css('--text-muted');
+  g.fillText('sensor', L - 6, rowH / 2); g.fillText('daemon', L - 6, rowH + gap + rowH / 2);
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i], x = xOf(off + i, w);
-    g.fillStyle = f.state === 0 ? css('--surface-2') : f.state === 1 ? css('--mv') : f.state === 2 ? css('--st') : '#9085e9';
+    g.fillStyle = cols[f.state] ?? cols[0];
     g.fillRect(x, 0, colW + .6, rowH);
-    if (f.present !== undefined) { g.fillStyle = f.present ? css('--good') : css('--surface-2'); g.fillRect(x, rowH + 4, colW + .6, rowH); }
+    if (f.present !== undefined) { g.fillStyle = f.present ? css('--good') : css('--surface-2'); g.fillRect(x, rowH + gap, colW + .6, rowH); }
   }
   crosshair(g, w, h);
 }
 
 function timeAxis(g, w, h) {
+  g.strokeStyle = css('--line'); g.lineWidth = 1;
+  for (const s of TICKS) { const x = Math.round(xOf(N - 1 - s * 10, w)) + .5; g.beginPath(); g.moveTo(x, h - B); g.lineTo(x, h - B + 4); g.stroke(); }
   g.fillStyle = css('--text-muted'); g.font = '11px ' + css('--mono'); g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-  for (let s = 0; s <= 120; s += 20) { const x = xOf(N - 1 - s * 10, w); g.fillText(s === 0 ? 'now' : `-${s}s`, x, h - 6); }
+  for (const s of TICKS) g.fillText(s === 0 ? 'now' : `-${s}s`, xOf(N - 1 - s * 10, w), h - 6);
 }
 function crosshair(g, w, h) {
   if (hoverX == null) return;
   g.strokeStyle = css('--text-secondary'); g.lineWidth = 1; g.beginPath(); g.moveTo(hoverX + .5, 0); g.lineTo(hoverX + .5, h - B + 4); g.stroke();
 }
 
-const cv = { mv: document.getElementById('hmMv'), st: document.getElementById('hmSt'), d: document.getElementById('dist'), b: document.getElementById('band') };
+const cv = { mv: $('hmMv'), st: $('hmSt'), d: $('dist'), b: $('band') };
+const wrap = $('wrap'), tip = $('tip');
 function draw() {
   requestAnimationFrame(draw);
+  const stale = streamLost || Date.now() - lastFrameAt > 3000;
+  setStale(stale, streamLost ? 'stream lost, reconnecting' : 'no frames');
   if (!dirty) return; dirty = false;
   // stamp the daemon verdict onto the newest frame so the band can show it
   if (status && frames.length) frames[frames.length - 1].present = status.present;
-  heatmap(cv.mv, 'mg', RAMP_MV, params?.MovingSens);
-  heatmap(cv.st, 'sg', RAMP_ST, params?.StaticSens);
-  distChart(cv.d); bandChart(cv.b); table(); chips();
+  const G = gateCount();
+  heatmap(cv.mv, 'mg', RAMP_MV, params?.MovingSens, G);
+  heatmap(cv.st, 'sg', RAMP_ST, params?.StaticSens, G);
+  distChart(cv.d, G * GATE_CM); bandChart(cv.b); table(G); stats();
 }
 draw();
 addEventListener('resize', () => dirty = true);
 
 // ---- hover --------------------------------------------------------------
-const wrap = document.getElementById('wrap'), tip = document.getElementById('tip');
+const STATE = ['none', 'moving', 'static', 'both'];
 wrap.addEventListener('mousemove', ev => {
   const c = cv.d, r = c.getBoundingClientRect(), w = c.clientWidth;
   const x = ev.clientX - r.left;
-  if (x < L || x > w - R || !frames.length) { hoverX = null; tip.style.display = 'none'; dirty = true; return; }
+  if (x < L || x > w - R || !frames.length) { hoverX = null; hoverRow = null; tip.style.display = 'none'; dirty = true; return; }
   hoverX = x; dirty = true;
+  const G = gateCount(), tgt = ev.target;
+  hoverRow = null;
+  if (tgt === cv.mv || tgt === cv.st) {
+    const rr = tgt.getBoundingClientRect(), y = ev.clientY - rr.top, rowH = (tgt.clientHeight - T - B) / G;
+    const row = Math.floor((y - T) / rowH);
+    if (row >= 0 && row < G) hoverRow = { key: tgt === cv.mv ? 'mg' : 'sg', r: row };
+  }
   const idx = Math.round((x - L) / (w - L - R) * (N - 1)) - (N - frames.length);
   const f = frames[Math.max(0, Math.min(frames.length - 1, idx))];
   if (!f) return;
   const ago = ((Date.now() - f.t) / 1000).toFixed(1);
-  let s = `-${ago}s  ${['none','moving','static','both'][f.state]}\nmoving ${f.mv} cm / ${f.mvE}\nstatic ${f.st} cm / ${f.stE}\ndetect ${f.det} cm`;
-  if (f.mg) s += `\n\ngate   mv  st\n` + f.mg.map((v, i) => `${String(i * GATE_CM).padStart(4)}  ${String(v).padStart(3)} ${String(f.sg?.[i] ?? '').padStart(3)}`).join('\n');
-  tip.textContent = s;
-  const wr = wrap.getBoundingClientRect();
-  tip.style.left = Math.min(ev.clientX - wr.left + 14, wr.width - 200) + 'px';
-  tip.style.top = (ev.clientY - wr.top + 14) + 'px';
+  const G2 = f.mg ? Math.min(G, f.mg.length) : 0;
+  const stateCol = ['var(--surface-2)', 'var(--mv)', 'var(--st)', 'var(--both)'][f.state] ?? 'var(--surface-2)';
+  let h = `<div class="tip-head"><span class="ago">-${ago} s</span><span class="state"><i style="background:${stateCol}"></i>${STATE[f.state] ?? f.state}</span>`;
+  if (hoverRow && G2) h += `<span class="gate">gate ${hoverRow.r} · ${hoverRow.r * GATE_CM}–${(hoverRow.r + 1) * GATE_CM} cm</span>`;
+  h += `</div><div class="tip-grid">`;
+  h += `<span class="k">moving</span><span class="v">${f.mv} cm</span><span class="e">${f.mvE}</span>`;
+  h += `<span class="k">static</span><span class="v">${f.st} cm</span><span class="e">${f.stE}</span>`;
+  h += `<span class="k">detect</span><span class="v">${f.det} cm</span><span class="e"></span></div>`;
+  if (G2) {
+    const ms = params?.MovingSens ?? [], ss = params?.StaticSens ?? [];
+    const cell = (v, thr, cls) => `<td class="bar ${cls}${thr != null && thr < 100 && v >= thr ? ' over' : ''}">${v}<i><b style="width:${Math.max(0, Math.min(100, v))}%"></b></i></td>`;
+    h += `<table class="tip-gates"><tr><th>gate</th><th>moving</th><th>static</th></tr>`;
+    for (let i = 0; i < G2; i++)
+      h += `<tr${hoverRow && hoverRow.r === i ? ' class="hl"' : ''}><td>${i * GATE_CM}</td>${cell(f.mg[i], ms[i], 'mv')}${cell(f.sg?.[i] ?? 0, ss[i], 'st')}</tr>`;
+    h += `</table>`;
+  }
+  tip.innerHTML = h;
   tip.style.display = 'block';
+  const wr = wrap.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+  let vx = ev.clientX + 14; if (vx + tw > innerWidth - 8) vx = ev.clientX - tw - 14;
+  let vy = ev.clientY + 14; if (vy + th > innerHeight - 8) vy = ev.clientY - th - 14;
+  tip.style.left = Math.max(0, vx - wr.left) + 'px';
+  tip.style.top = (vy - wr.top) + 'px';
 });
-wrap.addEventListener('mouseleave', () => { hoverX = null; tip.style.display = 'none'; dirty = true; });
+wrap.addEventListener('mouseleave', () => { hoverX = null; hoverRow = null; tip.style.display = 'none'; dirty = true; });
 
 // ---- table view ---------------------------------------------------------
-function table() {
+let tableHTML = '';
+function table(G) {
   const f = frames[frames.length - 1]; if (!f || !f.mg) return;
   const ms = params?.MovingSens ?? [], ss = params?.StaticSens ?? [];
-  let html = '<tr><th>gate</th>' + f.mg.map((_, i) => `<th>${i * GATE_CM}–${(i + 1) * GATE_CM}</th>`).join('') + '</tr>';
-  html += '<tr><td>moving</td>' + f.mg.map((v, i) => `<td class="${ms[i] != null && v >= ms[i] && ms[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
-  html += '<tr><td>static</td>' + f.sg.map((v, i) => `<td class="${ss[i] != null && v >= ss[i] && ss[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
-  html += '<tr><td>threshold mv</td>' + ms.map(v => `<td>${v}</td>`).join('') + '</tr>';
-  html += '<tr><td>threshold st</td>' + ss.map(v => `<td>${v}</td>`).join('') + '</tr>';
-  document.getElementById('tbl').innerHTML = html;
+  const mg = f.mg.slice(0, G), sg = (f.sg ?? []).slice(0, G);
+  let html = '<tr><th>gate</th>' + mg.map((_, i) => `<th>${i * GATE_CM}–${(i + 1) * GATE_CM}</th>`).join('') + '</tr>';
+  html += '<tr><td>moving</td>' + mg.map((v, i) => `<td class="${ms[i] != null && v >= ms[i] && ms[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
+  html += '<tr><td>static</td>' + sg.map((v, i) => `<td class="${ss[i] != null && v >= ss[i] && ss[i] < 100 ? 'over' : ''}">${v}</td>`).join('') + '</tr>';
+  html += '<tr><td>threshold mv</td>' + mg.map((_, i) => `<td>${ms[i] ?? ''}</td>`).join('') + '</tr>';
+  html += '<tr><td>threshold st</td>' + sg.map((_, i) => `<td>${ss[i] ?? ''}</td>`).join('') + '</tr>';
+  if (html !== tableHTML) { tableHTML = html; $('tbl').innerHTML = html; }
 }
 </script>
