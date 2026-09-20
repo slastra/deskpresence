@@ -135,12 +135,17 @@ rather than guess. With the live view open:
 
 Measured at this desk, module about 1 m from the chair:
 
-| | Near-gate moving energy |
-|---|---|
-| Seated, still | peaks 70 to 100 at least every 2.4 s |
-| Room empty | max 27, mean 19 |
+| | Gates 0 and 1 (0 to 150 cm) | Gate 2 (150 to 225 cm) |
+|---|---|---|
+| Seated, still | peaks 100 every few seconds, mean 55 to 73 | 50 to 100 |
+| Room empty | max 30 | blips of 35 to 86 |
 
-Which gives the unit file's `-near-gates 3 -energy-min 35 -absence 10s`.
+Which gives the unit file's `-near-gates 2 -energy-min 35 -absence 10s`.
+The third gate was in the rule at first; it turned out to carry energy from
+beyond the desk (a body in the next room reads through drywall), and one
+walk-away test kept the TV on for a full minute because of it. Keep the
+near gates to where the chair actually is and let the empty-room maximum
+set the threshold.
 
 If a gate beyond the chair picks up the room (a fan, a corridor), lower its
 sensitivity in the module rather than widening the daemon's rule:
