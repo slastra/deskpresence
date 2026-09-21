@@ -214,7 +214,7 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
 | `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act |
 | `-hold-file` | `$XDG_RUNTIME_DIR/deskpresence.hold` | unix seconds; observe only until then, then removed (`deskpresence hold 30m`) |
-| `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 5 s..10 min (`deskpresence absence 90s`) |
+| `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 5 s..30 min (`deskpresence absence 90s`) |
 | `-audio-flag` | `~/.local/state/deskpresence/audio-follow` | reads `off` to leave players and volumes alone |
 | `-http` | `127.0.0.1:7391` | live view address; empty disables |
 | `-no-audio-fade` | | leave PipeWire streams alone |

@@ -579,7 +579,7 @@ func (a *fileDuration) read(path string, fallback time.Duration) (time.Duration,
 	return d, changed
 }
 
-// parseAbsence reads "45", "45s" or "1m30s", clamped to 5 s..10 min.
+// parseAbsence reads "45", "45s" or "1m30s", clamped to 5 s..30 min.
 func parseAbsence(path string, fallback time.Duration) time.Duration {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -597,8 +597,8 @@ func parseAbsence(path string, fallback time.Duration) time.Duration {
 	if d < 5*time.Second {
 		d = 5 * time.Second
 	}
-	if d > 10*time.Minute {
-		d = 10 * time.Minute
+	if d > 30*time.Minute {
+		d = 30 * time.Minute
 	}
 	return d
 }
