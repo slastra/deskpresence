@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ import (
 
 type config struct {
 	port, script, stateFile, statusFile, pauseFile string
+	holdFile, audioFlag, absenceFile               string
 	hooks                                          string
 	httpAddr                                       string
 	baud                                           int
@@ -58,6 +60,9 @@ func main() {
 	flag.StringVar(&c.stateFile, "state", filepath.Join(home, ".config/lgtv/state"), "TV state file written by the actuator")
 	flag.StringVar(&c.statusFile, "status", filepath.Join(home, ".local/state/deskpresence/status.json"), "status output for bars/chips")
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
+	flag.StringVar(&c.holdFile, "hold-file", filepath.Join(runtime, "deskpresence.hold"), "unix seconds; until then, observe but never act (deskpresence hold 30m)")
+	flag.StringVar(&c.absenceFile, "absence-file", filepath.Join(home, ".local/state/deskpresence/absence"), "overrides -absence while present (seconds or a duration; deskpresence absence 45s)")
+	flag.StringVar(&c.audioFlag, "audio-flag", filepath.Join(home, ".local/state/deskpresence/audio-follow"), "reads \"off\" -> leave players and volumes alone")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
@@ -74,6 +79,16 @@ func main() {
 		baud := fs.Int("baud", 256000, "serial baud rate")
 		_ = fs.Parse(os.Args[2:])
 		runConfig(fs.Args(), *port, *baud)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "absence" {
+		// deskpresence absence 45s | off: the away timer, changeable live
+		runAbsence(os.Args[2:], filepath.Join(home, ".local/state/deskpresence/absence"))
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "hold" {
+		// deskpresence hold 30m | off: a timed pause the daemon expires itself
+		runHold(os.Args[2:], filepath.Join(runtime, "deskpresence.hold"))
 		return
 	}
 	flag.Parse()
@@ -121,6 +136,7 @@ func main() {
 		lastStatus  string
 		lastFrame   Frame
 		pausedNoted bool
+		audioNoted  = true // audio follow, as of the last tick
 		staleNoted  bool
 		staleSince  time.Time
 		lastAlert   time.Time
@@ -178,10 +194,44 @@ func main() {
 				pol.Reset()
 			}
 		case now := <-tick.C:
+			// A pause file or an unexpired hold both mean observe only: no
+			// TV, no fade, no media. The hold is the "keep awake 30 min"
+			// button; it expires itself so a forgotten one cannot leave the
+			// OLED unguarded.
+			// The away timer follows its override file while the daemon runs:
+			// the bar's slider writes it, so a film night does not need a
+			// restart. A missing or bad file means the -absence flag.
+			if d, changed := absenceOverride.read(c.absenceFile, c.absence); changed {
+				log.Printf("absence: %s", d)
+				pol.Absence = d
+			}
+			hold := holdUntil(c.holdFile, now)
+			_, pauseErr := os.Stat(c.pauseFile)
+			paused := pauseErr == nil || !hold.IsZero()
+			if paused != pausedNoted {
+				if paused && !hold.IsZero() {
+					log.Printf("hold: observing only until %s", hold.Format(time.Kitchen))
+				} else if paused {
+					log.Printf("paused: %s exists, observing only", c.pauseFile)
+				} else {
+					log.Printf("unpaused")
+				}
+				pausedNoted = paused
+			}
+			// Audio follow can be switched off from the bar. Switching it
+			// off mid-fade or while away hands the volumes straight back.
+			audioOn := !flagOff(c.audioFlag)
+			if audioOn != audioNoted {
+				log.Printf("audio follow: %v", audioOn)
+				if !audioOn && snd != nil && snd.level > 0 {
+					go snd.rampUp(1500 * time.Millisecond)
+				}
+				audioNoted = audioOn
+			}
 			// Media follows the debounced verdict, not the TV: pause the
 			// moment "away" latches, resume the moment "present" does.
 			if pr, known := pol.Present(); known {
-				if lastKnown && pr != lastPresent {
+				if lastKnown && pr != lastPresent && audioOn && !paused {
 					if pr {
 						media.resume()
 						go snd.rampUp(1500 * time.Millisecond)
@@ -195,22 +245,13 @@ func main() {
 			// Audio follows the same fade as the screen. While away it holds
 			// at zero (the verdict flip above already applied 1); rampUp owns
 			// the way back, so skip apply until it has cleared the snapshot.
-			if pr, known := pol.Present(); known && pr && !pausedNoted && snd != nil {
+			if pr, known := pol.Present(); known && pr && !paused && audioOn && snd != nil {
 				lvl := pol.FadeLevel(now)
 				if lvl > 0 && lvl < 1 || lvl == 0 && snd.level > 0 && snd.level < 1 {
 					snd.apply(lvl) // rising, or cancelled mid-fade (restore)
 				}
 			}
-			if _, err := os.Stat(c.pauseFile); err == nil {
-				if !pausedNoted {
-					log.Printf("paused: %s exists, observing only", c.pauseFile)
-					pausedNoted = true
-				}
-			} else {
-				if pausedNoted {
-					log.Printf("unpaused")
-					pausedNoted = false
-				}
+			if !paused {
 				if pol.SensorStale(now) {
 					if !staleNoted {
 						log.Printf("sensor: no frames for %s, holding", c.stale)
@@ -234,7 +275,7 @@ func main() {
 			if pr, known := pol.Present(); known {
 				hist.tick(now, pr, c.energyMin)
 			}
-			if s := status(pol, act, lastFrame, now, pausedNoted); s != lastStatus {
+			if s := status(pol, act, lastFrame, now, paused, hold, audioOn); s != lastStatus {
 				writeStatus(c.statusFile, s)
 				h.publish("status", json.RawMessage(s))
 				lastStatus = s
@@ -472,24 +513,165 @@ func alert(msg string) {
 
 // --- status ---------------------------------------------------------------
 
-func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool) string {
+func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool, hold time.Time, audioOn bool) string {
 	pr, known := p.Present()
 	s := map[string]any{
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
 			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance},
-		"present":   pr,
-		"known":     known,
-		"since":     p.PresentSince().UnixMilli(),
-		"fade":      map[bool]float64{true: 0, false: p.FadeLevel(now)}[paused],
-		"sensor_ok": !p.SensorStale(now),
-		"tv":        a.tvState(),
-		"busy":      a.busy,
-		"paused":    paused,
-		"state":     f.State,
-		"distance":  f.Distance(),
+		"present":      pr,
+		"known":        known,
+		"since":        p.PresentSince().UnixMilli(),
+		"fade":         map[bool]float64{true: 0, false: p.FadeLevel(now)}[paused],
+		"sensor_ok":    !p.SensorStale(now),
+		"tv":           a.tvState(),
+		"busy":         a.busy,
+		"paused":       paused,
+		"hold_until":   map[bool]int64{true: 0, false: hold.UnixMilli()}[hold.IsZero()],
+		"audio_follow": audioOn,
+		"state":        f.State,
+		"distance":     f.Distance(),
 	}
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// holdUntil reads the hold file (unix seconds). An expired or unreadable
+// hold is removed and reported as zero.
+func holdUntil(path string, now time.Time) time.Time {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || secs <= now.Unix() {
+		_ = os.Remove(path)
+		return time.Time{}
+	}
+	return time.Unix(secs, 0)
+}
+
+// absenceOverride tracks the -absence-file: it is stat'ed every tick and
+// re-read only when its mtime moves, so the slider costs nothing at rest.
+var absenceOverride fileDuration
+
+type fileDuration struct {
+	mtime time.Time
+	seen  bool
+	value time.Duration
+}
+
+// read returns the current absence and whether it changed since last call.
+func (a *fileDuration) read(path string, fallback time.Duration) (time.Duration, bool) {
+	st, err := os.Stat(path)
+	var d time.Duration
+	var mt time.Time
+	if err == nil {
+		mt = st.ModTime()
+		if a.seen && mt.Equal(a.mtime) {
+			return a.value, false
+		}
+		d = parseAbsence(path, fallback)
+	} else {
+		d = fallback
+	}
+	changed := !a.seen || d != a.value
+	a.seen, a.mtime, a.value = true, mt, d
+	return d, changed
+}
+
+// parseAbsence reads "45", "45s" or "1m30s", clamped to 5 s..10 min.
+func parseAbsence(path string, fallback time.Duration) time.Duration {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fallback
+	}
+	t := strings.TrimSpace(string(b))
+	d, err := time.ParseDuration(t)
+	if err != nil {
+		if secs, err2 := strconv.Atoi(t); err2 == nil {
+			d = time.Duration(secs) * time.Second
+		} else {
+			return fallback
+		}
+	}
+	if d < 5*time.Second {
+		d = 5 * time.Second
+	}
+	if d > 10*time.Minute {
+		d = 10 * time.Minute
+	}
+	return d
+}
+
+// runAbsence is the `absence` subcommand: `absence 45s` writes the
+// override, `absence off` removes it (back to the -absence flag), no
+// argument prints the override.
+func runAbsence(args []string, path string) {
+	if len(args) == 0 {
+		if b, err := os.ReadFile(path); err == nil {
+			fmt.Printf("absence override: %s\n", strings.TrimSpace(string(b)))
+		} else {
+			fmt.Println("no override (using -absence)")
+		}
+		return
+	}
+	if args[0] == "off" {
+		_ = os.Remove(path)
+		return
+	}
+	if d := parseAbsenceText(args[0]); d == 0 {
+		fmt.Fprintf(os.Stderr, "absence: want seconds or a duration like 45s, got %q\n", args[0])
+		os.Exit(2)
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(args[0]+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "absence:", err)
+		os.Exit(1)
+	}
+}
+
+func parseAbsenceText(t string) time.Duration {
+	if d, err := time.ParseDuration(t); err == nil && d > 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(t); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+// flagOff is true when a flag file reads "off"; missing means on.
+func flagOff(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(b)) == "off"
+}
+
+// runHold is the `hold` subcommand: `hold 30m` writes the expiry, `hold off`
+// removes it, no argument prints what is left.
+func runHold(args []string, path string) {
+	if len(args) == 0 {
+		if h := holdUntil(path, time.Now()); !h.IsZero() {
+			fmt.Printf("held until %s (%s left)\n", h.Format(time.Kitchen), time.Until(h).Round(time.Second))
+		} else {
+			fmt.Println("no hold")
+		}
+		return
+	}
+	if args[0] == "off" {
+		_ = os.Remove(path)
+		return
+	}
+	d, err := time.ParseDuration(args[0])
+	if err != nil || d <= 0 {
+		fmt.Fprintf(os.Stderr, "hold: want a duration like 30m or off, got %q\n", args[0])
+		os.Exit(2)
+	}
+	until := time.Now().Add(d)
+	if err := os.WriteFile(path, []byte(strconv.FormatInt(until.Unix(), 10)+"\n"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "hold:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("held until %s\n", until.Format(time.Kitchen))
 }
 
 func writeStatus(path, s string) {

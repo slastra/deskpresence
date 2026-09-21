@@ -170,6 +170,9 @@ Edit the `ExecStart` flags in the unit to your calibrated values. While
 tuning:
 
     touch $XDG_RUNTIME_DIR/deskpresence.pause    # observe only, never act
+    deskpresence hold 30m                        # same, but expires itself (`hold off` releases)
+    deskpresence absence 90s                     # away timer, live; `absence off` returns to -absence
+    echo off > ~/.local/state/deskpresence/audio-follow   # leave players and volumes alone
     deskpresence -dry-run -replay present:5s,absent:70s,present:3s -absence 60s
     cat ~/.local/state/deskpresence/status.json
     journalctl --user -u deskpresence -f
@@ -210,6 +213,9 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-state` | `~/.config/lgtv/state` | TV state file the actuator writes |
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
 | `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act |
+| `-hold-file` | `$XDG_RUNTIME_DIR/deskpresence.hold` | unix seconds; observe only until then, then removed (`deskpresence hold 30m`) |
+| `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 5 s..10 min (`deskpresence absence 90s`) |
+| `-audio-flag` | `~/.local/state/deskpresence/audio-follow` | reads `off` to leave players and volumes alone |
 | `-http` | `127.0.0.1:7391` | live view address; empty disables |
 | `-no-audio-fade` | | leave PipeWire streams alone |
 | `-audio-exclude` | `emotune,speech-dispatcher` | application names never faded |
