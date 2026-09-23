@@ -1,5 +1,6 @@
 // deskpresence: turn the TV off when nobody is at the desk and back on the
-// moment someone is, driven by an LD2410C mmWave sensor on a USB UART.
+// moment someone is, driven by an LD2410C mmWave sensor on a USB UART (or,
+// with -sensor tof, a laptop's VL53L1 time-of-flight sensor; see tof.go).
 //
 // It replaces input-idle blanking (swayidle): idle inhibitors, key presses and
 // video playback are irrelevant, only bodies count. The actuator is the
@@ -38,6 +39,7 @@ type config struct {
 	dryRun, verbose, noMpris, noAudioFade          bool
 	audioExclude                                   string
 	replay                                         string
+	sensor, alertText                              string
 }
 
 func main() {
@@ -47,6 +49,7 @@ func main() {
 		runtime = os.TempDir()
 	}
 	var c config
+	flag.StringVar(&c.sensor, "sensor", "ld2410", "presence source: ld2410 (mmWave on a USB UART) or tof (the Lenovo VL53L1 on the sensor hub)")
 	flag.StringVar(&c.port, "port", "/dev/serial/by-id/*CP210*", "serial device (glob ok)")
 	flag.IntVar(&c.baud, "baud", 256000, "serial baud rate")
 	flag.DurationVar(&c.absence, "absence", 60*time.Second, "how long the desk must be empty before the TV goes off")
@@ -67,6 +70,7 @@ func main() {
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
+	flag.StringVar(&c.alertText, "alert-text", "Presence sensor offline. The OLED is not being blanked.", "what that alert says")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
 	flag.BoolVar(&c.noAudioFade, "no-audio-fade", false, "do not fade PipeWire streams with the screen")
 	flag.StringVar(&c.audioExclude, "audio-exclude", "emotune,speech-dispatcher", "application.name substrings never faded")
@@ -108,10 +112,18 @@ func main() {
 	if c.httpAddr != "" {
 		go h.serve(c.httpAddr)
 	}
-	if c.replay != "" {
+	// The ToF reader switches its sensor off on the way out; wait for that
+	// before exiting, or a stopped daemon leaves the sensor running.
+	readerDone := make(chan struct{})
+	switch {
+	case c.replay != "":
 		go replayFrames(ctx, c.replay, frames)
-	} else {
+	case c.sensor == "tof":
+		go func() { readToF(ctx, frames); close(readerDone) }()
+	case c.sensor == "ld2410":
 		go readSerial(ctx, c, frames, h)
+	default:
+		log.Fatalf("unknown -sensor %q (want ld2410 or tof)", c.sensor)
 	}
 
 	sleep := watchSleep(ctx) // nil channel when logind is unavailable
@@ -147,11 +159,17 @@ func main() {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	hist := newHistory(filepath.Join(filepath.Dir(c.statusFile), "history.json"), 500*time.Millisecond, 120)
-	log.Printf("deskpresence up: absence=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.absence, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
+	log.Printf("deskpresence up: sensor=%s absence=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.sensor, c.absence, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
 
 	for {
 		select {
 		case <-ctx.Done():
+			if c.sensor == "tof" && c.replay == "" {
+				select {
+				case <-readerDone:
+				case <-time.After(2 * time.Second):
+				}
+			}
 			return
 		case f := <-frames:
 			lastFrame = f
@@ -262,7 +280,7 @@ func main() {
 					// once, then hourly.
 					if everSeen && now.Sub(staleSince) > c.alertAfter && now.Sub(lastAlert) > time.Hour {
 						lastAlert = now
-						alert("Presence sensor offline. The OLED is not being blanked.")
+						alert(c.alertText)
 					}
 				}
 				if a := pol.Decide(act.tvState(), now, act.busy); a != "" {
