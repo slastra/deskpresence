@@ -146,6 +146,7 @@ func main() {
 	done := make(chan string, 1)
 	var (
 		lastStatus  string
+		lastWrite   time.Time
 		lastFrame   Frame
 		pausedNoted bool
 		audioNoted  = true // audio follow, as of the last tick
@@ -293,10 +294,12 @@ func main() {
 			if pr, known := pol.Present(); known {
 				hist.tick(now, pr, c.energyMin)
 			}
-			if s := status(pol, act, lastFrame, now, paused, hold, audioOn); s != lastStatus {
+			if s := status(pol, act, lastFrame, now, paused, hold, audioOn); statusDue(s, lastStatus, lastWrite, now) {
 				writeStatus(c.statusFile, s)
-				h.publish("status", json.RawMessage(s))
-				lastStatus = s
+				if s != lastStatus {
+					h.publish("status", json.RawMessage(s))
+				}
+				lastStatus, lastWrite = s, now
 			}
 		}
 	}
@@ -690,6 +693,18 @@ func runHold(args []string, path string) {
 		os.Exit(1)
 	}
 	fmt.Printf("held until %s\n", until.Format(time.Kitchen))
+}
+
+// statusHeartbeat is the longest status.json goes unwritten. idle-guard.sh
+// reads a file older than 15 s as a dead daemon; writing only on change let
+// a still, seated evening look like one, and the guard blanked the screen
+// under someone deskpresence could see (2026-09-26 04:18 and 04:26).
+const statusHeartbeat = 5 * time.Second
+
+// statusDue reports whether the status file should be written: on any
+// change, and at least every statusHeartbeat so its age means "alive".
+func statusDue(s, last string, lastWrite, now time.Time) bool {
+	return s != last || now.Sub(lastWrite) >= statusHeartbeat
 }
 
 func writeStatus(path, s string) {
