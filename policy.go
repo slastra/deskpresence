@@ -29,10 +29,13 @@ type Policy struct {
 	// Fade is how long before Absence the screen should start going dark:
 	// a visible warning that the desk reads as empty, cheap to cancel with
 	// one breath. 0 disables.
-	Fade       time.Duration
-	StaleAfter time.Duration // no frames this long -> sensor unknown, no actions
-	MinBackoff time.Duration
-	MaxBackoff time.Duration
+	Fade time.Duration
+	// InputUnknownCap bounds how long the radar alone may keep the panel
+	// lit when there is no input signal (hypridle down): past it, off.
+	InputUnknownCap time.Duration
+	StaleAfter      time.Duration // no frames this long -> sensor unknown, no actions
+	MinBackoff      time.Duration
+	MaxBackoff      time.Duration
 
 	lastFrame    time.Time
 	rawSince     time.Time // start of the current raw-present run
@@ -153,15 +156,54 @@ func (p *Policy) SensorStale(now time.Time) bool {
 	return p.lastFrame.IsZero() || now.Sub(p.lastFrame) > p.StaleAfter
 }
 
-// Decide returns "on", "off" or "" given the TV state tv-screen.sh last
-// recorded ("on", "off" or "" for unknown).
-func (p *Policy) Decide(tv string, now time.Time, busy bool) string {
-	if busy || !p.presentKnown || p.SensorStale(now) {
-		return ""
+// Want is the whole decision: whether the TV should be on, and why. The
+// panel is an OLED and the rule is fail safe: when in doubt, off.
+//
+//	input away (1 h, inhibitors ignored)  off, whatever the radar says
+//	input active (< 1 min)                on, even if the radar misses you
+//	radar healthy                         the radar's verdict; with no input
+//	                                      signal at all, only for
+//	                                      InputUnknownCap, then off
+//	radar out, input quiet (< 10 min)     on
+//	radar out, input idle                 off
+//	radar out, no input signal            off once the radar is stale
+//
+// A radar that is merely waiting for its first verdict, with no input
+// signal either, has no opinion yet ("").
+func (p *Policy) Want(now time.Time, in Input, unknownFor time.Duration) (want, why string) {
+	switch in {
+	case InputAway:
+		return "off", "no input for an hour"
+	case InputActive:
+		return "on", "input"
 	}
-	want := "off"
-	if p.present {
-		want = "on"
+	if p.presentKnown && !p.SensorStale(now) {
+		if in == InputUnknown && p.InputUnknownCap > 0 && unknownFor >= p.InputUnknownCap {
+			return "off", "no input signal for " + p.InputUnknownCap.String()
+		}
+		if p.present {
+			return "on", "radar present"
+		}
+		return "off", "radar away"
+	}
+	switch in {
+	case InputQuiet:
+		return "on", "radar out, input recent"
+	case InputIdle:
+		return "off", "radar out, input idle"
+	}
+	if p.SensorStale(now) {
+		return "off", "radar out, no input signal"
+	}
+	return "", "waiting for a verdict"
+}
+
+// Decide turns Want's answer into an action given the TV state tv-screen.sh
+// last recorded ("on", "off", or anything else for not confirmed either
+// way), with backoff between repeated attempts. "" means nothing to do.
+func (p *Policy) Decide(want, tv string, now time.Time, busy bool) string {
+	if busy || want == "" {
+		return ""
 	}
 	if tv == want {
 		p.attempts = 0

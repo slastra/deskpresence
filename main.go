@@ -29,11 +29,12 @@ import (
 
 type config struct {
 	port, script, stateFile, statusFile, pauseFile string
-	holdFile, audioFlag, absenceFile               string
+	holdFile, audioFlag, absenceFile, inputFile    string
 	hooks                                          string
 	httpAddr                                       string
 	baud                                           int
 	absence, debounce, stale, alertAfter, fade     time.Duration
+	inputCap                                       time.Duration
 	maxDistance                                    uint
 	nearGates, energyMin                           int
 	dryRun, verbose, noMpris, noAudioFade          bool
@@ -65,12 +66,14 @@ func main() {
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
 	flag.StringVar(&c.holdFile, "hold-file", filepath.Join(runtime, "deskpresence.hold"), "unix seconds; until then, observe but never act (deskpresence hold 30m)")
 	flag.StringVar(&c.absenceFile, "absence-file", filepath.Join(home, ".local/state/deskpresence/absence"), "overrides -absence while present (seconds or a duration; deskpresence absence 45s)")
+	flag.StringVar(&c.inputFile, "input-file", filepath.Join(runtime, "deskpresence.input"), "input idle level hypridle writes (deskpresence input active|quiet|idle|away)")
+	flag.DurationVar(&c.inputCap, "input-cap", time.Hour, "with no input signal (hypridle down), the radar alone keeps the TV on at most this long")
 	flag.StringVar(&c.audioFlag, "audio-flag", filepath.Join(home, ".local/state/deskpresence/audio-follow"), "reads \"off\" -> leave players and volumes alone")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
-	flag.StringVar(&c.alertText, "alert-text", "Presence sensor offline. The OLED is not being blanked.", "what that alert says")
+	flag.StringVar(&c.alertText, "alert-text", "Presence sensor offline. The screen now follows keyboard and mouse idle.", "what that alert says")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
 	flag.BoolVar(&c.noAudioFade, "no-audio-fade", false, "do not fade PipeWire streams with the screen")
 	flag.StringVar(&c.audioExclude, "audio-exclude", "emotune,speech-dispatcher", "application.name substrings never faded")
@@ -90,6 +93,11 @@ func main() {
 		runAbsence(os.Args[2:], filepath.Join(home, ".local/state/deskpresence/absence"))
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "input" {
+		// deskpresence input active|quiet|idle|away: what hypridle's listeners run
+		runInput(os.Args[2:], filepath.Join(runtime, "deskpresence.input"))
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "hold" {
 		// deskpresence hold 30m | off: a timed pause the daemon expires itself
 		runHold(os.Args[2:], filepath.Join(runtime, "deskpresence.hold"))
@@ -102,6 +110,7 @@ func main() {
 		Absence: c.absence, Debounce: c.debounce, MaxDistance: uint16(c.maxDistance),
 		NearGates: c.nearGates, EnergyMin: c.energyMin, Fade: c.fade,
 		StaleAfter: c.stale, MinBackoff: 30 * time.Second, MaxBackoff: 10 * time.Minute,
+		InputUnknownCap: c.inputCap,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -149,13 +158,19 @@ func main() {
 		lastWrite   time.Time
 		lastFrame   Frame
 		pausedNoted bool
-		audioNoted  = true // audio follow, as of the last tick
-		staleNoted  bool
-		staleSince  time.Time
-		lastAlert   time.Time
-		everSeen    bool // never alert about a sensor that was never plugged in
-		flipWindow  time.Time
-		flips       int
+		// the input layer (input.go)
+		hypridle          = &processAlive{comm: "hypridle"}
+		inputNoted        Input
+		inputChecked      bool
+		inputUnknownSince time.Time
+		lastInputAlert    time.Time
+		audioNoted        = true // audio follow, as of the last tick
+		staleNoted        bool
+		staleSince        time.Time
+		lastAlert         time.Time
+		everSeen          bool // never alert about a sensor that was never plugged in
+		flipWindow        time.Time
+		flips             int
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -227,6 +242,25 @@ func main() {
 			hold := holdUntil(c.holdFile, now)
 			_, pauseErr := os.Stat(c.pauseFile)
 			paused := pauseErr == nil || !hold.IsZero()
+			// The input layer: hypridle's level, trusted only while hypridle
+			// runs. Unknown input is timed; Want caps the radar alone.
+			in := readInput(c.inputFile, hypridle.get(now))
+			if in != inputNoted || !inputChecked {
+				log.Printf("input: %s", map[bool]string{true: "unknown (hypridle not running or silent)", false: string(in)}[in == InputUnknown])
+				inputNoted, inputChecked = in, true
+			}
+			if in == InputUnknown {
+				if inputUnknownSince.IsZero() {
+					inputUnknownSince = now
+				}
+				if now.Sub(inputUnknownSince) > 5*time.Minute && now.Sub(lastInputAlert) > 6*time.Hour {
+					lastInputAlert = now
+					alert("Idle guard degraded: hypridle is not running. The radar alone is keeping the screen on, for at most " + c.inputCap.String() + ".")
+				}
+			} else {
+				inputUnknownSince = time.Time{}
+			}
+			want, why := pol.Want(now, in, map[bool]time.Duration{true: now.Sub(inputUnknownSince), false: 0}[!inputUnknownSince.IsZero()])
 			if paused != pausedNoted {
 				if paused && !hold.IsZero() {
 					log.Printf("hold: observing only until %s", hold.Format(time.Kitchen))
@@ -270,10 +304,17 @@ func main() {
 					snd.apply(lvl) // rising, or cancelled mid-fade (restore)
 				}
 			}
-			if !paused {
+			// A hold is the explicit, self-expiring "keep it on" and beats
+			// everything. A pause only stops the radar acting: an hour
+			// without input still turns the panel off, so a forgotten
+			// pause cannot leave the OLED lit overnight.
+			if paused && !(hold.IsZero() && in == InputAway) {
+				want = ""
+			}
+			{
 				if pol.SensorStale(now) {
 					if !staleNoted {
-						log.Printf("sensor: no frames for %s, holding", c.stale)
+						log.Printf("sensor: no frames for %s, input idle decides", c.stale)
 						staleNoted = true
 						staleSince = now
 					}
@@ -284,9 +325,9 @@ func main() {
 						alert(c.alertText)
 					}
 				}
-				if a := pol.Decide(act.tvState(), now, act.busy); a != "" {
+				if a := pol.Decide(want, act.tvState(), now, act.busy); a != "" {
 					pr, _ := pol.Present()
-					log.Printf("decide: %s (present=%v, last %s)", a, pr, lastFrame)
+					log.Printf("decide: %s (%s; present=%v input=%s, last %s)", a, why, pr, map[bool]string{true: "unknown", false: string(in)}[in == InputUnknown], lastFrame)
 					act.busy = true
 					go func() { act.run(a); done <- a }()
 				}
@@ -294,7 +335,7 @@ func main() {
 			if pr, known := pol.Present(); known {
 				hist.tick(now, pr, c.energyMin)
 			}
-			if s := status(pol, act, lastFrame, now, paused, hold, audioOn); statusDue(s, lastStatus, lastWrite, now) {
+			if s := status(pol, act, lastFrame, now, paused, hold, audioOn, in, want); statusDue(s, lastStatus, lastWrite, now) {
 				writeStatus(c.statusFile, s)
 				if s != lastStatus {
 					h.publish("status", json.RawMessage(s))
@@ -336,13 +377,41 @@ func (a *actuator) run(action string) {
 	for _, h := range a.hooks {
 		go a.hook(h, action)
 	}
-	cmd := exec.Command(a.script, action)
+	// Bounded: the script's own lock wait and back-off fit well inside
+	// this, and a hung script must not leave the daemon busy for good.
+	ctx, cancel := context.WithTimeout(context.Background(), actuatorTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, a.script, action)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		log.Printf("actuator: %s %s failed after %s: %v", filepath.Base(a.script), action, time.Since(t0).Round(time.Second), err)
+	err := cmd.Run()
+	took := time.Since(t0).Round(time.Second)
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		log.Printf("actuator: %s %s did not run to the end after %s: %v", filepath.Base(a.script), action, took, err)
 		return
 	}
-	log.Printf("actuator: %s ok in %s", action, time.Since(t0).Round(time.Second))
+	log.Printf("actuator: %s %s in %s", action, actuatorOutcome(code), took)
+}
+
+// actuatorTimeout bounds one tv-screen.sh run.
+const actuatorTimeout = 7 * time.Minute
+
+// actuatorOutcome names tv-screen.sh's exit codes. The state file stays
+// the daemon's record of the TV; these say why it does or does not match.
+func actuatorOutcome(code int) string {
+	switch code {
+	case 0:
+		return "done"
+	case 1:
+		return "FAILED (the TV may be lit; retrying with backoff)"
+	case 2:
+		return "abandoned (the decision changed while it ran)"
+	case 3:
+		return "unconfirmed (TV unreachable; state unknown, retrying with backoff)"
+	}
+	return fmt.Sprintf("exited %d", code)
 }
 
 // hook runs one extra command through sh with a bound, so a device that
@@ -534,7 +603,7 @@ func alert(msg string) {
 
 // --- status ---------------------------------------------------------------
 
-func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool, hold time.Time, audioOn bool) string {
+func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool, hold time.Time, audioOn bool, in Input, want string) string {
 	pr, known := p.Present()
 	s := map[string]any{
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
@@ -549,6 +618,8 @@ func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool, hold ti
 		"paused":       paused,
 		"hold_until":   map[bool]int64{true: 0, false: hold.UnixMilli()}[hold.IsZero()],
 		"audio_follow": audioOn,
+		"input":        map[bool]string{true: "unknown", false: string(in)}[in == InputUnknown],
+		"want":         want,
 		"state":        f.State,
 		"distance":     f.Distance(),
 	}

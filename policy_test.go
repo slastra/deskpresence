@@ -16,29 +16,29 @@ func TestLeaveAndReturn(t *testing.T) {
 	here := Frame{State: 2, StaticCM: 100}
 	gone := Frame{}
 	p.Observe(here, t0)
-	if a := p.Decide("off", t0, false); a != "on" {
+	if a := decideQ(p, "off", t0, false); a != "on" {
 		t.Fatalf("seated at start, tv off: want on, got %q", a)
 	}
 	// user leaves; nothing for 59s
 	for s := 1; s <= 59; s++ {
 		p.Observe(gone, t0.Add(time.Duration(s)*time.Second))
 	}
-	if a := p.Decide("on", t0.Add(59*time.Second), false); a != "" {
+	if a := decideQ(p, "on", t0.Add(59*time.Second), false); a != "" {
 		t.Fatalf("59s absent: want no action, got %q", a)
 	}
 	p.Observe(gone, t0.Add(61*time.Second))
-	if a := p.Decide("on", t0.Add(61*time.Second), false); a != "off" {
+	if a := decideQ(p, "on", t0.Add(61*time.Second), false); a != "off" {
 		t.Fatalf("61s absent: want off, got %q", a)
 	}
 	// returns: present within debounce
 	t1 := t0.Add(5 * time.Minute)
 	p.Observe(here, t1)
 	p.Observe(here, t1.Add(200*time.Millisecond))
-	if a := p.Decide("off", t1.Add(200*time.Millisecond), false); a != "" {
+	if a := decideQ(p, "off", t1.Add(200*time.Millisecond), false); a != "" {
 		t.Fatalf("200ms present: want no action yet, got %q", a)
 	}
 	p.Observe(here, t1.Add(600*time.Millisecond))
-	if a := p.Decide("off", t1.Add(600*time.Millisecond), false); a != "on" {
+	if a := decideQ(p, "off", t1.Add(600*time.Millisecond), false); a != "on" {
 		t.Fatalf("600ms present: want on, got %q", a)
 	}
 }
@@ -112,6 +112,13 @@ func TestGateRule(t *testing.T) {
 	}
 }
 
+// decideQ is Decide as the radar-driven tests mean it: input quiet, so a
+// healthy radar decides.
+func decideQ(p *Policy, tv string, now time.Time, busy bool) string {
+	w, _ := p.Want(now, InputQuiet, 0)
+	return p.Decide(w, tv, now, busy)
+}
+
 func TestBackoffAndStale(t *testing.T) {
 	p := newTestPolicy()
 	// an empty room has to earn its first verdict: Absence of quiet frames
@@ -119,24 +126,28 @@ func TestBackoffAndStale(t *testing.T) {
 	p.Observe(Frame{}, t0)
 	t0 = t0.Add(p.Absence)
 	p.Observe(Frame{}, t0)
-	if a := p.Decide("on", t0, false); a != "off" {
+	if a := decideQ(p, "on", t0, false); a != "off" {
 		t.Fatalf("want off, got %q", a)
 	}
 	// actuator failed to record "off"; immediate retry must be suppressed
-	if a := p.Decide("on", t0.Add(time.Second), false); a != "" {
+	if a := decideQ(p, "on", t0.Add(time.Second), false); a != "" {
 		t.Fatalf("want backoff, got %q", a)
 	}
 	p.Observe(Frame{}, t0.Add(31*time.Second))
-	if a := p.Decide("on", t0.Add(31*time.Second), false); a != "off" {
+	if a := decideQ(p, "on", t0.Add(31*time.Second), false); a != "off" {
 		t.Fatalf("after 30s backoff want off, got %q", a)
 	}
 	// busy actuator never gets a second request
-	if a := p.Decide("on", t0.Add(2*time.Minute), true); a != "" {
+	if a := decideQ(p, "on", t0.Add(2*time.Minute), true); a != "" {
 		t.Fatalf("busy: want none, got %q", a)
 	}
-	// sensor silent for 6s: no opinion
-	if a := p.Decide("on", t0.Add(37*time.Second), false); a != "" {
-		t.Fatalf("stale sensor: want none, got %q", a)
+	// sensor silent for 6s: no longer a hold. Recent input keeps the
+	// panel on, idle or no input signal turns it off (fail safe).
+	stale := t0.Add(37 * time.Second)
+	for in, want := range map[Input]string{InputQuiet: "on", InputIdle: "off", InputUnknown: "off"} {
+		if w, _ := p.Want(stale, in, 0); w != want {
+			t.Errorf("stale sensor, input %q: want %q, got %q", in, want, w)
+		}
 	}
 }
 
@@ -191,7 +202,7 @@ func TestStartupWaitsForAVerdict(t *testing.T) {
 	// a still reader: 5 s of frames under threshold must not become "off"
 	for i := 0; i < 50; i++ {
 		p.Observe(quiet, t0.Add(time.Duration(i)*100*time.Millisecond))
-		if a := p.Decide("on", t0.Add(time.Duration(i)*100*time.Millisecond), false); a != "" {
+		if a := decideQ(p, "on", t0.Add(time.Duration(i)*100*time.Millisecond), false); a != "" {
 			t.Fatalf("frame %d: decided %q before any verdict", i, a)
 		}
 	}
@@ -214,7 +225,61 @@ func TestStartupWaitsForAVerdict(t *testing.T) {
 			t.Fatalf("at %s known=%v want %v", now.Sub(t0), known, want)
 		}
 	}
-	if a := q.Decide("on", t0.Add(61*time.Second), false); a != "off" {
+	if a := decideQ(q, "on", t0.Add(61*time.Second), false); a != "off" {
 		t.Fatalf("empty room after Absence should turn the TV off, got %q", a)
+	}
+}
+
+// TestWantTable pins the whole decision, row by row: input away beats the
+// radar, input active beats a radar that misses you, a healthy radar
+// decides otherwise (capped when there is no input signal), and with the
+// radar out the input timer decides. Fail safe throughout.
+func TestWantTable(t *testing.T) {
+	present := func() *Policy {
+		p := newTestPolicy()
+		p.InputUnknownCap = time.Hour
+		t0 := time.Unix(1000, 0)
+		for i := 0; i <= 6; i++ {
+			p.Observe(Frame{State: 1, MovingCM: 90}, t0.Add(time.Duration(i)*100*time.Millisecond))
+		}
+		return p
+	}
+	absent := func() *Policy {
+		p := newTestPolicy()
+		t0 := time.Unix(1000, 0).Add(-p.Absence)
+		p.Observe(Frame{}, t0)
+		p.Observe(Frame{}, t0.Add(p.Absence))
+		return p
+	}
+	now := time.Unix(1000, 0).Add(700 * time.Millisecond)
+	for _, tc := range []struct {
+		name       string
+		p          *Policy
+		in         Input
+		unknownFor time.Duration
+		at         time.Time
+		want       string
+	}{
+		{"away beats a present radar", present(), InputAway, 0, now, "off"},
+		{"active beats an absent radar", absent(), InputActive, 0, now, "on"},
+		{"quiet: radar present", present(), InputQuiet, 0, now, "on"},
+		{"idle: radar present keeps it on", present(), InputIdle, 0, now, "on"},
+		{"quiet: radar absent", absent(), InputQuiet, 0, now, "off"},
+		{"no input signal, radar present, under the cap", present(), InputUnknown, 59 * time.Minute, now, "on"},
+		{"no input signal, radar present, past the cap", present(), InputUnknown, time.Hour, now, "off"},
+		{"radar stale, input quiet", present(), InputQuiet, 0, now.Add(time.Minute), "on"},
+		{"radar stale, input idle", present(), InputIdle, 0, now.Add(time.Minute), "off"},
+		{"radar stale, no input signal", present(), InputUnknown, 0, now.Add(time.Minute), "off"},
+	} {
+		if got, why := tc.p.Want(tc.at, tc.in, tc.unknownFor); got != tc.want {
+			t.Errorf("%s: want %q, got %q (%s)", tc.name, tc.want, got, why)
+		}
+	}
+	// A radar still earning its first verdict, with no input signal, has
+	// no opinion yet rather than blanking a restart.
+	fresh := newTestPolicy()
+	fresh.Observe(Frame{}, time.Unix(1000, 0))
+	if got, _ := fresh.Want(time.Unix(1000, 0), InputUnknown, 0); got != "" {
+		t.Errorf("waiting for a verdict: want no opinion, got %q", got)
 	}
 }
