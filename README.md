@@ -2,14 +2,20 @@
 
 Turns the TV off when nobody is at the desk and back on the moment someone
 is. A 24 GHz mmWave presence sensor (Hi-Link LD2410C) on a USB UART feeds a
-small Go daemon that keeps one invariant:
+small Go daemon that owns the TV. Its rule, for an OLED whose life it is
+guarding, is fail safe: when in doubt, the panel goes off.
 
     TV on  <=>  someone within reach of the sensor
+                and the keyboard or mouse touched within the last hour
 
-It replaces idle blanking. Keyboard activity, idle inhibitors and playing
-video are irrelevant. Only bodies count, so a film keeps playing while you
-watch it and the screen goes dark seconds after you walk away, even if a
-download is still running.
+Bodies do most of the work, so a film keeps playing while you watch it and
+the screen goes dark seconds after you walk away, even if a download is
+still running. Under the radar sits conventional input idle, from
+[hypridle](#input-idle-hypridle) with idle inhibitors ignored: an hour
+without input turns the panel off whatever the radar says, so a radar that
+misreads an empty room (it did, all night, on 2026-09-26) cannot keep the
+panel lit. Input also covers for the radar: typing keeps the TV on even if
+the sensor misses you, and a silent sensor hands the decision to input idle.
 
 The daemon also fades PipeWire audio and pauses MPRIS players on the way
 out, resumes them on the way back, and serves a live view of the sensor at
@@ -28,8 +34,21 @@ first few gates, the ones that cover the chair:
   least `-energy-min`, held for `-debounce` (500 ms) before the TV comes on.
 - **Absent** when that has not been true for `-absence`. Single-frame blips
   neither count as presence nor restart the absence clock.
-- **No opinion** when the sensor has been silent for `-stale` (5 s). The daemon
-  holds whatever state it is in.
+- **Radar out** when the sensor has been silent for `-stale` (5 s). Input idle
+  decides: on while the keyboard or mouse was used in the last 10 minutes,
+  off after that. It no longer holds the TV in whatever state it was.
+
+The whole decision (`Policy.Want`):
+
+| input | radar | TV |
+|---|---|---|
+| away (1 h without input) | anything | off, until input returns |
+| active (< 1 min) | anything | on |
+| quiet or idle | healthy | the radar's verdict |
+| quiet (< 10 min) | out | on |
+| idle | out | off |
+| unknown (hypridle not running) | healthy | the radar's verdict for at most `-input-cap` (1 h), then off, with an alert |
+| unknown | out | off |
 
 Why not the module's own presence output or its summary distance? The
 summary distance smears about 80 cm past a seated body, the static channel
@@ -42,7 +61,9 @@ The actuator is any script that takes `on` or `off`. The daemon compares the
 desk state with the TV state file every 250 ms and acts whenever they
 disagree, with a 30 s to 10 min backoff for a failing actuator. It is
 level-triggered: if something else turns the TV off while you are reading,
-it comes back on within a few seconds.
+it comes back on within a few seconds. The actuator's exit code says how it
+went (0 done, 1 failed, 2 abandoned because the decision changed, 3 TV
+unreachable, state unknown); the state file stays the record.
 
 Around the edges:
 
@@ -172,6 +193,7 @@ tuning:
     touch $XDG_RUNTIME_DIR/deskpresence.pause    # observe only, never act
     deskpresence hold 30m                        # same, but expires itself (`hold off` releases)
     deskpresence absence 90s                     # away timer, live; `absence off` returns to -absence
+    deskpresence input active                    # what hypridle's listeners run: active|quiet|idle|away
     echo off > ~/.local/state/deskpresence/audio-follow   # leave players and volumes alone
     deskpresence -dry-run -replay present:5s,absent:70s,present:3s -absence 60s
     cat ~/.local/state/deskpresence/status.json
@@ -205,15 +227,17 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-max-distance` | `250` | basic frames only: ignore targets farther than this (cm) |
 | `-debounce` | `500ms` | presence must hold this long before the TV comes on |
 | `-absence` | `60s` | desk must be empty this long before the TV goes off |
-| `-stale` | `5s` | no frames for this long means no opinion |
+| `-stale` | `5s` | no frames for this long means the radar is out and input idle decides |
+| `-input-file` | `$XDG_RUNTIME_DIR/deskpresence.input` | input level hypridle writes (`deskpresence input active\|quiet\|idle\|away`) |
+| `-input-cap` | `1h` | with no input signal (hypridle down), the radar alone keeps the TV on at most this long |
 | `-fade` | `5s` | start dimming this long before absence latches; 0 disables |
 | `-alert-after` | `2m` | sensor silent this long triggers the spoken and desktop alert |
 | `-script` | `~/.config/hypr/scripts/tv-screen.sh` | actuator, called with `on` or `off` |
 | `-hooks` | none | extra commands run beside the actuator, comma separated; `{}` becomes `on` or `off`, otherwise the verb is appended |
 | `-state` | `~/.config/lgtv/state` | TV state file the actuator writes |
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
-| `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act |
-| `-hold-file` | `$XDG_RUNTIME_DIR/deskpresence.hold` | unix seconds; observe only until then, then removed (`deskpresence hold 30m`) |
+| `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act, except that an hour without input still turns the TV off |
+| `-hold-file` | `$XDG_RUNTIME_DIR/deskpresence.hold` | unix seconds; observe only until then, then removed (`deskpresence hold 30m`); the one thing that beats an hour without input |
 | `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 5 s..30 min (`deskpresence absence 90s`) |
 | `-audio-flag` | `~/.local/state/deskpresence/audio-follow` | reads `off` to leave players and volumes alone |
 | `-http` | `127.0.0.1:7391` | live view address; empty disables |
@@ -248,10 +272,28 @@ modeset race stays at 60 Hz until reboot).
 **Bars and chips.** Read `status.json`. It changes only when something
 changed, so polling it once a second is cheap.
 
-**Idle daemons.** Keep swayidle or similar as a last-resort burn-in guard
-with a long timeout rather than removing it. If it fires while someone is
-reading, this daemon turns the TV back on within a few seconds. The state
-file makes a double `off` harmless.
+### Input idle (hypridle)
+
+hypridle reports input idle through `deskpresence input <level>`, which
+writes `$XDG_RUNTIME_DIR/deskpresence.input`. Its listeners must ignore
+idle inhibitors (per listener, `ignore_inhibit = true`, plus the general
+`ignore_*_inhibit` options): an app holding one all night is exactly what
+left the panel lit. A film longer than an hour takes `deskpresence hold 3h`.
+
+    general { ignore_dbus_inhibit = true; ignore_systemd_inhibit = true; ignore_wayland_inhibit = true }
+    listener { timeout = 60;   ignore_inhibit = true; on-timeout = deskpresence input quiet; on-resume = deskpresence input active }
+    listener { timeout = 600;  ignore_inhibit = true; on-timeout = deskpresence input idle;  on-resume = deskpresence input active }
+    listener { timeout = 3600; ignore_inhibit = true; on-timeout = deskpresence input away;  on-resume = deskpresence input active }
+
+A level counts only while a process named `hypridle` is running, so a stale
+"active" from a crashed hypridle cannot keep the panel lit. Run it as a
+service that writes `active` on start and always restarts (an
+`ExecStartPre=deskpresence input active` drop-in, `Restart=always`).
+
+Nothing else should turn the TV on or off, or it will fight this daemon.
+A watchdog on hypridle's 10-minute listener that blanks the TV only when
+this daemon is dead (its status file is older than 15 s) is the one
+exception worth having.
 
 ## Licence
 
