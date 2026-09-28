@@ -189,7 +189,7 @@ func (p *Policy) SensorStale(now time.Time) bool {
 // panel is an OLED and the rule is fail safe: when in doubt, off.
 //
 //	input away (1 h, inhibitors ignored)  off, whatever the radar says
-//	input active (< 1 min)                on, even if the radar misses you
+//	input active (< 20 s)                 on, even if the radar misses you
 //	radar healthy                         the radar's verdict; with no input
 //	                                      signal at all, only for
 //	                                      InputUnknownCap, then off

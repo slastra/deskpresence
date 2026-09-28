@@ -319,7 +319,7 @@ func main() {
 			// Audio follows the same fade as the screen. While away it holds
 			// at zero (the verdict flip above already applied 1); rampUp owns
 			// the way back, so skip apply until it has cleared the snapshot.
-			if pr, known := pol.Present(); known && pr && !paused && audioOn && snd != nil {
+			if pr, known := pol.Present(); known && pr && !paused && in != InputActive && audioOn && snd != nil {
 				lvl := pol.FadeLevel(now)
 				if lvl > 0 && lvl < 1 || lvl == 0 && snd.level > 0 && snd.level < 1 {
 					snd.apply(lvl) // rising, or cancelled mid-fade (restore)
@@ -632,10 +632,12 @@ func status(p *Policy, a *actuator, fl *floorLearner, f Frame, now time.Time, pa
 			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance,
 			"confirm_frames": p.ConfirmFrames, "confirm_window_ms": p.ConfirmWindow.Milliseconds(),
 			"floor_learned": learned, "floor_frames": floorFrames},
-		"present":      pr,
-		"known":        known,
-		"since":        p.PresentSince().UnixMilli(),
-		"fade":         map[bool]float64{true: 0, false: p.FadeLevel(now)}[paused],
+		"present": pr,
+		"known":   known,
+		"since":   p.PresentSince().UnixMilli(),
+		// No dim while input is active: the TV cannot go off then, and a
+		// dim that never ends in off reads as a fault.
+		"fade":         map[bool]float64{true: 0, false: p.FadeLevel(now)}[paused || in == InputActive],
 		"sensor_ok":    !p.SensorStale(now),
 		"tv":           a.tvState(),
 		"busy":         a.busy,

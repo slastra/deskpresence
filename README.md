@@ -52,9 +52,9 @@ The whole decision (`Policy.Want`):
 | input | radar | TV |
 |---|---|---|
 | away (1 h without input) | anything | off, until input returns |
-| active (< 1 min) | anything | on |
+| active (< 20 s) | anything | on |
 | quiet or idle | healthy | the radar's verdict |
-| quiet (< 10 min) | out | on |
+| quiet (20 s to 10 min) | out | on |
 | idle | out | off |
 | unknown (hypridle not running) | healthy | the radar's verdict for at most `-input-cap` (1 h), then off, with an alert |
 | unknown | out | off |
@@ -309,8 +309,13 @@ idle inhibitors (per listener, `ignore_inhibit = true`, plus the general
 `ignore_*_inhibit` options): an app holding one all night is exactly what
 left the panel lit. A film longer than an hour takes `deskpresence hold 3h`.
 
+Keep the quiet listener under the away timer (20 s against 30 s). Input
+that counts as active keeps the TV on whatever the radar says, and no dim
+is shown then, so a 60 s quiet made the real away timer a minute; the
+screen dimmed at 30 s and then sat there.
+
     general { ignore_dbus_inhibit = true; ignore_systemd_inhibit = true; ignore_wayland_inhibit = true }
-    listener { timeout = 60;   ignore_inhibit = true; on-timeout = deskpresence input quiet; on-resume = deskpresence input active }
+    listener { timeout = 20;   ignore_inhibit = true; on-timeout = deskpresence input quiet; on-resume = deskpresence input active }
     listener { timeout = 600;  ignore_inhibit = true; on-timeout = deskpresence input idle;  on-resume = deskpresence input active }
     listener { timeout = 3600; ignore_inhibit = true; on-timeout = deskpresence input away;  on-resume = deskpresence input active }
 

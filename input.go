@@ -10,15 +10,15 @@ import (
 )
 
 // Input is how recently someone touched the keyboard or mouse, as hypridle
-// reports it (listeners at 60 s, 10 min and 1 h, idle inhibitors ignored:
+// reports it (listeners at 20 s, 10 min and 1 h, idle inhibitors ignored:
 // a video or a stuck portal inhibit must not keep the OLED lit). It is the
 // conventional layer under the radar; see Policy.Want.
 type Input string
 
 const (
 	InputUnknown Input = ""       // hypridle not running, or it has said nothing this boot
-	InputActive  Input = "active" // input within the last minute
-	InputQuiet   Input = "quiet"  // 1-10 min without input
+	InputActive  Input = "active" // input within the last 20 s
+	InputQuiet   Input = "quiet"  // 20 s to 10 min without input
 	InputIdle    Input = "idle"   // 10-60 min without input
 	InputAway    Input = "away"   // an hour or more: the panel goes off whatever the radar says
 )
