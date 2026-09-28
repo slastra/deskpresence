@@ -30,10 +30,19 @@ carries a moving-energy and a static-energy value (0 to 100) for each of nine
 range gates, 75 cm apart. The daemon reads only the moving energy of the
 first few gates, the ones that cover the chair:
 
-- **Present** when moving energy in any of the first `-near-gates` gates is at
-  least `-energy-min`, held for `-debounce` (500 ms) before the TV comes on.
-- **Absent** when that has not been true for `-absence`. Single-frame blips
-  neither count as presence nor restart the absence clock.
+- **Present** when moving energy in any of the first `-near-gates` gates
+  reaches the threshold in `-confirm-frames` (2) frames within
+  `-confirm-window` (4 s), held for `-debounce` (500 ms) before the TV comes
+  on. A single noisy frame neither counts as presence nor restarts the
+  absence clock.
+- **Absent** when that has not been true for `-absence` (10 to 60 s).
+- **The threshold learns the room.** The empty-room noise drifts (a 99.5th
+  percentile of 27 after the module swap, 41 a week later), so the daemon
+  keeps six hours of near-gate energy from moments it is sure the room is
+  empty: its own "away" with the TV off, or an hour without input. The
+  threshold is that noise's 99.5th percentile plus 4, never under
+  `-energy-min` and never over 70, once 3000 frames (five minutes) are
+  held. It is saved in `-floor-file` and every change is logged.
 - **Radar out** when the sensor has been silent for `-stale` (5 s). Input idle
   decides: on while the keyboard or mouse was used in the last 10 minutes,
   off after that. It no longer holds the TV in whatever state it was.
@@ -149,7 +158,9 @@ rather than guess. With the live view open:
    well above zero.
 2. Walk out of the room for 30 s. Read the highest value the same rows reach
    with nobody there.
-3. Pick `-energy-min` between the two, closer to the empty-room number.
+3. Pick `-energy-min` between the two, closer to the empty-room number. It
+   is the floor under the learned threshold, which will rise above it if
+   the room is noisier.
 4. Pick `-absence` for the longest gap a still reader leaves between
    frames above the threshold, times two. A seated person's moving energy
    spikes every few seconds, but a four-minute recording of reading with
@@ -164,7 +175,20 @@ Measured at this desk, module about 1 m from the chair:
 | Reading, hands off | peaks 33 to 53 every 5 s, longest gap above 38 was 10 s | |
 | Room empty | mostly under 30, single frames of 32 to 38 | blips of 35 to 86 |
 
-Which gives the unit file's `-near-gates 2 -energy-min 38 -absence 20s -fade 8s`.
+Which gave `-near-gates 2 -energy-min 38 -absence 20s -fade 8s`. By
+2026-09-27 the empty room reached 41 at the 99.5th percentile and threw a
+frame over 38 every 10 to 20 s, so the verdict never went away. A
+10-minute empty recording and a 15-minute still one gave the current rule:
+
+| rule | empty room: presence refreshes in 575 s | seated: longest gap |
+|---|---|---|
+| any frame at 38 | 57 | 10 s |
+| two frames at 45 within 4 s | 8, the longest quiet stretch 293 s | 17.6 s |
+
+Hence the unit file's `-energy-min 40 -absence 30s -fade 8s`, with the
+learned threshold (45 from that recording) on top. An away timer longer
+than a minute would rarely expire in an empty room, so the daemon clamps it
+at 60 s; long still stretches are what `hold` and input activity are for.
 Static energy does not help here: the module reports none for gates 0 and
 1, and gates 2 and 3 read 100 with the room empty.
 The third gate was in the rule at first; it turned out to carry energy from
@@ -192,7 +216,7 @@ tuning:
 
     touch $XDG_RUNTIME_DIR/deskpresence.pause    # observe only, never act
     deskpresence hold 30m                        # same, but expires itself (`hold off` releases)
-    deskpresence absence 90s                     # away timer, live; `absence off` returns to -absence
+    deskpresence absence 45s                     # away timer, live, 10-60 s; `absence off` returns to -absence
     deskpresence input active                    # what hypridle's listeners run: active|quiet|idle|away
     echo off > ~/.local/state/deskpresence/audio-follow   # leave players and volumes alone
     deskpresence -dry-run -replay present:5s,absent:70s,present:3s -absence 60s
@@ -201,7 +225,9 @@ tuning:
 
 `status.json` is rewritten on every change and is what a bar or chip reads:
 
-    rule       near_gates, energy_min, absence_ms, max_distance
+    rule       near_gates, energy_min (the live threshold), absence_ms,
+               max_distance, confirm_frames, confirm_window_ms,
+               floor_learned, floor_frames
     present    the daemon's verdict
     known      false until the first frame
     since      ms timestamp of the last verdict change
@@ -223,7 +249,10 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-port` | `/dev/serial/by-id/*CP210*` | serial device, glob allowed |
 | `-baud` | `256000` | the module default |
 | `-near-gates` | `3` | gates (75 cm each) that count as the desk; 0 uses `-max-distance` |
-| `-energy-min` | `40` | moving energy in a near gate that counts as presence |
+| `-energy-min` | `40` | the lowest the learned threshold may go (moving energy in a near gate) |
+| `-confirm-frames` | `2` | frames at or over the threshold within `-confirm-window` that count as presence; 1 = any frame |
+| `-confirm-window` | `4s` | see `-confirm-frames` |
+| `-floor-file` | `~/.local/state/deskpresence/floor.json` | learned empty-room noise, six hours of 10-minute histograms |
 | `-max-distance` | `250` | basic frames only: ignore targets farther than this (cm) |
 | `-debounce` | `500ms` | presence must hold this long before the TV comes on |
 | `-absence` | `60s` | desk must be empty this long before the TV goes off |
@@ -238,7 +267,7 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
 | `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act, except that an hour without input still turns the TV off |
 | `-hold-file` | `$XDG_RUNTIME_DIR/deskpresence.hold` | unix seconds; observe only until then, then removed (`deskpresence hold 30m`); the one thing that beats an hour without input |
-| `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 5 s..30 min (`deskpresence absence 90s`) |
+| `-absence-file` | `~/.local/state/deskpresence/absence` | overrides `-absence` while the daemon runs, seconds or a duration, 10 to 60 s (`deskpresence absence 45s`) |
 | `-audio-flag` | `~/.local/state/deskpresence/audio-follow` | reads `off` to leave players and volumes alone |
 | `-http` | `127.0.0.1:7391` | live view address; empty disables |
 | `-no-audio-fade` | | leave PipeWire streams alone |

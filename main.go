@@ -34,7 +34,9 @@ type config struct {
 	httpAddr                                       string
 	baud                                           int
 	absence, debounce, stale, alertAfter, fade     time.Duration
-	inputCap                                       time.Duration
+	inputCap, confirmWindow                        time.Duration
+	confirmFrames                                  int
+	floorFile                                      string
 	maxDistance                                    uint
 	nearGates, energyMin                           int
 	dryRun, verbose, noMpris, noAudioFade          bool
@@ -58,7 +60,10 @@ func main() {
 	flag.DurationVar(&c.stale, "stale", 5*time.Second, "no frames for this long -> no opinion, no actions")
 	flag.UintVar(&c.maxDistance, "max-distance", 250, "basic frames only: ignore targets farther than this many cm (0 = any)")
 	flag.IntVar(&c.nearGates, "near-gates", 3, "engineering frames: gates (75 cm each) that count as the desk; 0 = use max-distance")
-	flag.IntVar(&c.energyMin, "energy-min", 40, "engineering frames: moving energy in a near gate that counts as presence")
+	flag.IntVar(&c.energyMin, "energy-min", 40, "engineering frames: the lowest the learned threshold may go (moving energy in a near gate)")
+	flag.IntVar(&c.confirmFrames, "confirm-frames", 2, "frames at or over the threshold within -confirm-window that count as presence (1 = any frame)")
+	flag.DurationVar(&c.confirmWindow, "confirm-window", 4*time.Second, "see -confirm-frames")
+	flag.StringVar(&c.floorFile, "floor-file", filepath.Join(home, ".local/state/deskpresence/floor.json"), "learned empty-room noise (six hours of histograms)")
 	flag.StringVar(&c.script, "script", filepath.Join(home, ".config/hypr/scripts/tv-screen.sh"), "actuator")
 	flag.StringVar(&c.hooks, "hooks", "", "extra commands run alongside the actuator, comma separated; {} is replaced by on|off, else it is appended (a light switch)")
 	flag.StringVar(&c.stateFile, "state", filepath.Join(home, ".config/lgtv/state"), "TV state file written by the actuator")
@@ -111,6 +116,12 @@ func main() {
 		NearGates: c.nearGates, EnergyMin: c.energyMin, Fade: c.fade,
 		StaleAfter: c.stale, MinBackoff: 30 * time.Second, MaxBackoff: 10 * time.Minute,
 		InputUnknownCap: c.inputCap,
+		ConfirmFrames:   c.confirmFrames, ConfirmWindow: c.confirmWindow,
+	}
+	floor := newFloorLearner(c.floorFile, c.energyMin)
+	if t, n, ok := floor.threshold(); ok {
+		pol.EnergyMin = t
+		log.Printf("floor: threshold %d from %d empty-room frames", t, n)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -193,6 +204,12 @@ func main() {
 			flipped := pol.Observe(f, now)
 			h.publish("frame", toEvent(f, now))
 			hist.observe(f, c.nearGates, now)
+			// Confidently empty: the radar's own away with the TV off, or an
+			// hour without input. Only these teach the floor.
+			if pr, known := pol.Present(); len(f.MovingGates) > 0 &&
+				((known && !pr && act.tvState() == "off") || inputNoted == InputAway) {
+				floor.observe(nearEnergy(f, c.nearGates), now)
+			}
 			if c.verbose {
 				log.Printf("frame: %s", f)
 			} else if pr, _ := pol.Present(); flipped && !pr {
@@ -238,6 +255,10 @@ func main() {
 			if d, changed := absenceOverride.read(c.absenceFile, c.absence); changed {
 				log.Printf("absence: %s", d)
 				pol.Absence = d
+			}
+			if t, n, ok := floor.threshold(); ok && t != pol.EnergyMin {
+				log.Printf("floor: threshold %d -> %d (99.5th percentile of %d empty-room frames + %d)", pol.EnergyMin, t, n, floor.margin)
+				pol.EnergyMin = t
 			}
 			hold := holdUntil(c.holdFile, now)
 			_, pauseErr := os.Stat(c.pauseFile)
@@ -333,9 +354,9 @@ func main() {
 				}
 			}
 			if pr, known := pol.Present(); known {
-				hist.tick(now, pr, c.energyMin)
+				hist.tick(now, pr, pol.EnergyMin)
 			}
-			if s := status(pol, act, lastFrame, now, paused, hold, audioOn, in, want); statusDue(s, lastStatus, lastWrite, now) {
+			if s := status(pol, act, floor, lastFrame, now, paused, hold, audioOn, in, want); statusDue(s, lastStatus, lastWrite, now) {
 				writeStatus(c.statusFile, s)
 				if s != lastStatus {
 					h.publish("status", json.RawMessage(s))
@@ -603,11 +624,14 @@ func alert(msg string) {
 
 // --- status ---------------------------------------------------------------
 
-func status(p *Policy, a *actuator, f Frame, now time.Time, paused bool, hold time.Time, audioOn bool, in Input, want string) string {
+func status(p *Policy, a *actuator, fl *floorLearner, f Frame, now time.Time, paused bool, hold time.Time, audioOn bool, in Input, want string) string {
 	pr, known := p.Present()
+	_, floorFrames, learned := fl.threshold()
 	s := map[string]any{
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
-			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance},
+			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance,
+			"confirm_frames": p.ConfirmFrames, "confirm_window_ms": p.ConfirmWindow.Milliseconds(),
+			"floor_learned": learned, "floor_frames": floorFrames},
 		"present":      pr,
 		"known":        known,
 		"since":        p.PresentSince().UnixMilli(),
@@ -686,11 +710,15 @@ func parseAbsence(path string, fallback time.Duration) time.Duration {
 			return fallback
 		}
 	}
-	if d < 5*time.Second {
-		d = 5 * time.Second
+	// 10-60 s. Longer used to be how a film night was kept lit, but the
+	// radar's noise refreshes presence every minute or so even with the
+	// confirm rule, so a longer timer never expires in an empty room;
+	// input activity and `hold` cover long still stretches now.
+	if d < 10*time.Second {
+		d = 10 * time.Second
 	}
-	if d > 30*time.Minute {
-		d = 30 * time.Minute
+	if d > 60*time.Second {
+		d = 60 * time.Second
 	}
 	return d
 }

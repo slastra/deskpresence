@@ -33,9 +33,17 @@ type Policy struct {
 	// InputUnknownCap bounds how long the radar alone may keep the panel
 	// lit when there is no input signal (hypridle down): past it, off.
 	InputUnknownCap time.Duration
-	StaleAfter      time.Duration // no frames this long -> sensor unknown, no actions
-	MinBackoff      time.Duration
-	MaxBackoff      time.Duration
+	// ConfirmFrames within ConfirmWindow at or over EnergyMin make one
+	// raw-present reading. A still person is over threshold every couple
+	// of seconds; room noise, since 2026-09-27, once every 10-20 s. One
+	// frame used to be enough, and noise alone then held "present" forever
+	// once the away timer was longer than its spacing.
+	ConfirmFrames int
+	ConfirmWindow time.Duration
+	recent        []time.Time
+	StaleAfter    time.Duration // no frames this long -> sensor unknown, no actions
+	MinBackoff    time.Duration
+	MaxBackoff    time.Duration
 
 	lastFrame    time.Time
 	rawSince     time.Time // start of the current raw-present run
@@ -54,7 +62,7 @@ type Policy struct {
 // flipped, so the caller can log what the sensor saw at the edge.
 func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	p.lastFrame = now
-	raw := p.rawPresent(f)
+	raw := p.rawPresent(f, now)
 	flipped = raw != p.raw
 	if raw && !p.raw {
 		p.rawSince = now
@@ -110,17 +118,38 @@ func (p *Policy) Observe(f Frame, now time.Time) (flipped bool) {
 	return flipped
 }
 
-func (p *Policy) rawPresent(f Frame) bool {
+func (p *Policy) rawPresent(f Frame, now time.Time) bool {
 	if p.NearGates > 0 && len(f.MovingGates) > 0 {
-		n := min(p.NearGates, len(f.MovingGates))
-		for _, e := range f.MovingGates[:n] {
-			if int(e) >= p.EnergyMin {
-				return true
-			}
+		if nearEnergy(f, p.NearGates) < p.EnergyMin {
+			return p.ConfirmFrames > 1 && p.confirmed(now)
 		}
-		return false
+		if p.ConfirmFrames <= 1 {
+			return true
+		}
+		p.recent = append(p.recent, now)
+		return p.confirmed(now)
 	}
 	return f.Present() && (p.MaxDistance == 0 || f.Distance() <= p.MaxDistance)
+}
+
+// confirmed drops over-threshold frames older than ConfirmWindow and says
+// whether ConfirmFrames remain.
+func (p *Policy) confirmed(now time.Time) bool {
+	i := 0
+	for i < len(p.recent) && now.Sub(p.recent[i]) > p.ConfirmWindow {
+		i++
+	}
+	p.recent = p.recent[i:]
+	return len(p.recent) >= p.ConfirmFrames
+}
+
+// nearEnergy is the highest moving energy over the near gates.
+func nearEnergy(f Frame, gates int) int {
+	e := 0
+	for _, v := range f.MovingGates[:min(gates, len(f.MovingGates))] {
+		e = max(e, int(v))
+	}
+	return e
 }
 
 // Present reports the debounced state and whether it is known at all.
