@@ -651,7 +651,7 @@ func status(p *Policy, a *actuator, fl *floorLearner, f Frame, now time.Time, pa
 	_, floorFrames, learned := fl.threshold()
 	s := map[string]any{
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
-			"absence_ms": p.Absence.Milliseconds(), "blackout_ms": p.Blackout.Milliseconds(), "max_distance": p.MaxDistance,
+			"absence_ms": p.Absence.Milliseconds(), "fade_ms": p.Fade.Milliseconds(), "blackout_ms": p.Blackout.Milliseconds(), "max_distance": p.MaxDistance,
 			"confirm_frames": p.ConfirmFrames, "confirm_window_ms": p.ConfirmWindow.Milliseconds(),
 			"floor_learned": learned, "floor_frames": floorFrames},
 		"present": pr,
