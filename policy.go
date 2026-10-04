@@ -30,6 +30,15 @@ type Policy struct {
 	// a visible warning that the desk reads as empty, cheap to cancel with
 	// one breath. 0 disables.
 	Fade time.Duration
+	// Blackout holds the TV on for this long after the desk empties, behind
+	// a fully black screen (the fade sits at 1 while away), before powering
+	// it off. An OLED showing black is dark pixels, nearly free, and a
+	// return inside the window is instant. Past a few minutes in standby
+	// the TV falls into a deeper sleep and a wake is a 17-30 s boot
+	// (measured 2026-10-03: 21 of 21 wakes after 15+ min off were slow, 0
+	// of 99 under 2 min). Only the radar's own away waits; an hour without
+	// input, or the radar going stale, still turns it off at once. 0 = off.
+	Blackout time.Duration
 	// InputUnknownCap bounds how long the radar alone may keep the panel
 	// lit when there is no input signal (hypridle down): past it, off.
 	InputUnknownCap time.Duration
@@ -213,7 +222,7 @@ func (p *Policy) Want(now time.Time, in Input, unknownFor time.Duration) (want, 
 		if p.present {
 			return "on", "radar present"
 		}
-		return "off", "radar away"
+		return "off", whyRadarAway
 	}
 	switch in {
 	case InputQuiet:
@@ -225,6 +234,24 @@ func (p *Policy) Want(now time.Time, in Input, unknownFor time.Duration) (want, 
 		return "off", "radar out, no input signal"
 	}
 	return "", "waiting for a verdict"
+}
+
+const whyRadarAway = "radar away"
+
+// HoldBlack applies Blackout to Want's answer: a radar "off" within
+// Blackout of the desk emptying becomes no opinion, so the TV stays as it
+// is (on, black) and a return costs nothing. Anything else passes through.
+func (p *Policy) HoldBlack(want, why string, now time.Time) (string, string) {
+	if p.InBlackout(want, why, now) {
+		return "", "radar away, screen black until the blackout ends"
+	}
+	return want, why
+}
+
+// InBlackout says whether HoldBlack would hold this answer.
+func (p *Policy) InBlackout(want, why string, now time.Time) bool {
+	return want == "off" && why == whyRadarAway && p.Blackout > 0 &&
+		!p.present && now.Sub(p.presentAt) < p.Blackout
 }
 
 // Decide turns Want's answer into an action given the TV state tv-screen.sh

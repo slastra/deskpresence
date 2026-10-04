@@ -283,3 +283,67 @@ func TestWantTable(t *testing.T) {
 		t.Errorf("waiting for a verdict: want no opinion, got %q", got)
 	}
 }
+
+// TestBlackout: once the desk empties, the radar's "off" is held for
+// Blackout (the TV stays on behind black), then goes through; a return
+// inside the window wants "on" with the TV never having left; a stale radar
+// is not held.
+func TestBlackout(t *testing.T) {
+	p := newTestPolicy()
+	p.Blackout = 10 * time.Minute
+	t0 := time.Unix(1000, 0)
+	here := Frame{State: 2, StaticCM: 100}
+	p.Observe(here, t0)
+	// Empty from t0; frames every second keep the radar healthy.
+	at := t0
+	feed := func(f Frame, until time.Time) {
+		for at.Before(until) {
+			at = at.Add(time.Second)
+			p.Observe(f, at)
+		}
+	}
+	away := t0.Add(p.Absence)
+	feed(Frame{}, away.Add(5*time.Minute))
+	want, why := p.Want(at, InputIdle, 0)
+	if want != "off" || why != whyRadarAway {
+		t.Fatalf("5 min away: Want should be the radar's off, got %q (%s)", want, why)
+	}
+	if got, why := p.HoldBlack(want, why, at); got != "" {
+		t.Fatalf("5 min away: blackout should hold the TV, got %q (%s)", got, why)
+	}
+	if !p.InBlackout(want, why, at) {
+		t.Fatal("5 min away: InBlackout should say so")
+	}
+	feed(Frame{}, away.Add(10*time.Minute))
+	want, why = p.Want(at, InputIdle, 0)
+	if got, _ := p.HoldBlack(want, why, at); got != "off" {
+		t.Fatalf("10 min away: blackout over, want off, got %q", got)
+	}
+
+	// A return inside the window: present again, nothing to switch.
+	p2 := newTestPolicy()
+	p2.Blackout = 10 * time.Minute
+	p, at = p2, t0
+	p.Observe(here, t0)
+	feed(Frame{}, away.Add(2*time.Minute))
+	feed(here, at.Add(2*time.Second))
+	want, why = p.Want(at, InputIdle, 0)
+	if got, _ := p.HoldBlack(want, why, at); got != "on" {
+		t.Fatalf("back inside the blackout: want on, got %q", got)
+	}
+	if a := p.Decide("on", "on", at, false); a != "" {
+		t.Fatalf("back inside the blackout: TV already on, want no action, got %q", a)
+	}
+
+	// A stale radar is not the radar's away: off at once.
+	p3 := newTestPolicy()
+	p3.Blackout = 10 * time.Minute
+	p, at = p3, t0
+	p.Observe(here, t0)
+	feed(Frame{}, away.Add(time.Minute))
+	stale := at.Add(time.Minute)
+	want, why = p.Want(stale, InputIdle, 0)
+	if got, _ := p.HoldBlack(want, why, stale); got != "off" {
+		t.Fatalf("stale radar during blackout: want off, got %q (%s)", got, why)
+	}
+}

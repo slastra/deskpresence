@@ -34,6 +34,7 @@ type config struct {
 	httpAddr                                       string
 	baud                                           int
 	absence, debounce, stale, alertAfter, fade     time.Duration
+	blackout                                       time.Duration
 	inputCap, confirmWindow                        time.Duration
 	confirmFrames                                  int
 	floorFile                                      string
@@ -65,7 +66,7 @@ func main() {
 	flag.DurationVar(&c.confirmWindow, "confirm-window", 4*time.Second, "see -confirm-frames")
 	flag.StringVar(&c.floorFile, "floor-file", filepath.Join(home, ".local/state/deskpresence/floor.json"), "learned empty-room noise (six hours of histograms)")
 	flag.StringVar(&c.script, "script", filepath.Join(home, ".config/hypr/scripts/tv-screen.sh"), "actuator")
-	flag.StringVar(&c.hooks, "hooks", "", "extra commands run alongside the actuator, comma separated; {} is replaced by on|off, else it is appended (a light switch)")
+	flag.StringVar(&c.hooks, "hooks", "", "commands run when the decision turns on|off (arrive/leave, even while -blackout keeps the TV on), comma separated; {} is replaced by on|off, else it is appended (a light switch)")
 	flag.StringVar(&c.stateFile, "state", filepath.Join(home, ".config/lgtv/state"), "TV state file written by the actuator")
 	flag.StringVar(&c.statusFile, "status", filepath.Join(home, ".local/state/deskpresence/status.json"), "status output for bars/chips")
 	flag.StringVar(&c.pauseFile, "pause-file", filepath.Join(runtime, "deskpresence.pause"), "while this exists, observe but never act")
@@ -77,6 +78,7 @@ func main() {
 	flag.BoolVar(&c.dryRun, "dry-run", false, "log actions instead of running the actuator")
 	flag.BoolVar(&c.verbose, "verbose", false, "log every frame")
 	flag.DurationVar(&c.fade, "fade", 5*time.Second, "start dimming the screen this long before absence latches (0 = off)")
+	flag.DurationVar(&c.blackout, "blackout", 0, "after the desk empties, keep the TV on behind a black screen this long before powering it off (0 = off at once)")
 	flag.DurationVar(&c.alertAfter, "alert-after", 2*time.Minute, "sensor silent this long -> spoken/desktop alert (OLED is unguarded)")
 	flag.StringVar(&c.alertText, "alert-text", "Presence sensor offline. The screen now follows keyboard and mouse idle.", "what that alert says")
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
@@ -113,7 +115,7 @@ func main() {
 
 	pol := &Policy{
 		Absence: c.absence, Debounce: c.debounce, MaxDistance: uint16(c.maxDistance),
-		NearGates: c.nearGates, EnergyMin: c.energyMin, Fade: c.fade,
+		NearGates: c.nearGates, EnergyMin: c.energyMin, Fade: c.fade, Blackout: c.blackout,
 		StaleAfter: c.stale, MinBackoff: 30 * time.Second, MaxBackoff: 10 * time.Minute,
 		InputUnknownCap: c.inputCap,
 		ConfirmFrames:   c.confirmFrames, ConfirmWindow: c.confirmWindow,
@@ -163,6 +165,11 @@ func main() {
 		snd = newAudio(c.audioExclude)
 	}
 	var lastPresent, lastKnown bool
+	// The hooks follow the decision, not the TV: during a blackout the desk
+	// is empty and the light should say so while the TV waits. Seeded from
+	// the TV so a restart does not replay a hello.
+	hookWant := act.tvState()
+	blackingOut := false
 	done := make(chan string, 1)
 	var (
 		lastStatus  string
@@ -186,7 +193,7 @@ func main() {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	hist := newHistory(filepath.Join(filepath.Dir(c.statusFile), "history.json"), 500*time.Millisecond, 120)
-	log.Printf("deskpresence up: sensor=%s absence=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.sensor, c.absence, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
+	log.Printf("deskpresence up: sensor=%s absence=%s blackout=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.sensor, c.absence, c.blackout, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
 
 	for {
 		select {
@@ -207,7 +214,7 @@ func main() {
 			// Confidently empty: the radar's own away with the TV off, or an
 			// hour without input. Only these teach the floor.
 			if pr, known := pol.Present(); len(f.MovingGates) > 0 &&
-				((known && !pr && act.tvState() == "off") || inputNoted == InputAway) {
+				((known && !pr && (act.tvState() == "off" || blackingOut)) || inputNoted == InputAway) {
 				floor.observe(nearEnergy(f, c.nearGates), now)
 			}
 			if c.verbose {
@@ -236,6 +243,8 @@ func main() {
 				log.Printf("sleep: powering TV off before suspend")
 				if !act.busy {
 					act.busy = true
+					act.fireHooks("off")
+					hookWant = "off"
 					act.run("off") // synchronous: logind waits on our inhibitor
 					act.busy = false
 				}
@@ -332,6 +341,12 @@ func main() {
 			if paused && !(hold.IsZero() && in == InputAway) {
 				want = ""
 			}
+			if want != "" && want != hookWant {
+				act.fireHooks(want)
+				hookWant = want
+			}
+			blackingOut = pol.InBlackout(want, why, now)
+			want, why = pol.HoldBlack(want, why, now)
 			{
 				if pol.SensorStale(now) {
 					if !staleNoted {
@@ -371,10 +386,10 @@ func main() {
 
 type actuator struct {
 	script, stateFile string
-	// hooks run with the same on|off, in parallel with the script and each
-	// other, so a light switch answers at once instead of after the TV's
-	// wake retries. They are fire and forget: presence is the truth, and a
-	// hook that fails is logged, never retried by the policy.
+	// hooks run with the decision's on|off, in parallel with each other and
+	// apart from the script, so a light switch answers at once instead of
+	// after the TV's wake (or a blackout). They are fire and forget:
+	// presence is the truth, and a hook that fails is logged, never retried.
 	hooks  []string
 	dryRun bool
 	busy   bool
@@ -388,16 +403,23 @@ func (a *actuator) tvState() string {
 	return strings.TrimSpace(string(b))
 }
 
+func (a *actuator) fireHooks(action string) {
+	if a.dryRun {
+		log.Printf("dry-run: would run hooks %v %s", a.hooks, action)
+		return
+	}
+	for _, h := range a.hooks {
+		go a.hook(h, action)
+	}
+}
+
 func (a *actuator) run(action string) {
 	if a.dryRun {
-		log.Printf("dry-run: would run %s %s (hooks %v)", a.script, action, a.hooks)
+		log.Printf("dry-run: would run %s %s", a.script, action)
 		_ = os.WriteFile(a.stateFile, []byte(action+"\n"), 0o644)
 		return
 	}
 	t0 := time.Now()
-	for _, h := range a.hooks {
-		go a.hook(h, action)
-	}
 	// Bounded: the script's own lock wait and back-off fit well inside
 	// this, and a hung script must not leave the daemon busy for good.
 	ctx, cancel := context.WithTimeout(context.Background(), actuatorTimeout)
@@ -629,7 +651,7 @@ func status(p *Policy, a *actuator, fl *floorLearner, f Frame, now time.Time, pa
 	_, floorFrames, learned := fl.threshold()
 	s := map[string]any{
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
-			"absence_ms": p.Absence.Milliseconds(), "max_distance": p.MaxDistance,
+			"absence_ms": p.Absence.Milliseconds(), "blackout_ms": p.Blackout.Milliseconds(), "max_distance": p.MaxDistance,
 			"confirm_frames": p.ConfirmFrames, "confirm_window_ms": p.ConfirmWindow.Milliseconds(),
 			"floor_learned": learned, "floor_frames": floorFrames},
 		"present": pr,

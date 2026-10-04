@@ -79,6 +79,16 @@ Around the edges:
 - `-fade` (5 s) dims the screen and PipeWire streams before absence latches,
   so the cut is not a surprise. Streams listed in `-audio-exclude` are left
   alone. Volumes are remembered by application and restored on return.
+- `-blackout` (off by default; the unit uses 10 min) keeps the TV on behind
+  the faded-out black screen for that long after the desk empties, and only
+  then powers it off. A black OLED is dark pixels, so this costs almost
+  nothing, and a return inside the window is instant. It exists because this
+  LG falls into a deeper standby after a few minutes off, and a wake from
+  there is a 17 to 30 s boot (2026-10-03: 21 of 21 wakes after 15+ min off
+  were slow, 0 of 99 under 2 min). Only the radar's own away waits: an hour
+  without input or a dead sensor still turns the TV off at once. The hooks
+  follow the decision, not the TV, so the light still goes off when you
+  leave.
 - MPRIS players are paused on leave and resumed on return (`-no-mpris` to
   disable).
 - A logind delay inhibitor turns the TV off before suspend. After resume the
@@ -260,9 +270,10 @@ near-gate moving energy per bin), `present[]`, `threshold` and `bin_ms`.
 | `-input-file` | `$XDG_RUNTIME_DIR/deskpresence.input` | input level hypridle writes (`deskpresence input active\|quiet\|idle\|away`) |
 | `-input-cap` | `1h` | with no input signal (hypridle down), the radar alone keeps the TV on at most this long |
 | `-fade` | `5s` | start dimming this long before absence latches; 0 disables |
+| `-blackout` | `0` | after the desk empties, keep the TV on behind a black screen this long before powering it off; 0 = off at once |
 | `-alert-after` | `2m` | sensor silent this long triggers the spoken and desktop alert |
 | `-script` | `~/.config/hypr/scripts/tv-screen.sh` | actuator, called with `on` or `off` |
-| `-hooks` | none | extra commands run beside the actuator, comma separated; `{}` becomes `on` or `off`, otherwise the verb is appended |
+| `-hooks` | none | commands run when the decision turns on or off (arrive and leave, even while `-blackout` holds the TV), comma separated; `{}` becomes `on` or `off`, otherwise the verb is appended |
 | `-state` | `~/.config/lgtv/state` | TV state file the actuator writes |
 | `-status` | `~/.local/state/deskpresence/status.json` | status output |
 | `-pause-file` | `$XDG_RUNTIME_DIR/deskpresence.pause` | while present, observe but never act, except that an hour without input still turns the TV off |
