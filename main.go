@@ -193,7 +193,12 @@ func main() {
 		flips             int
 		gateOpened        time.Time // the sensor gets -stale to report after waking
 	)
-	tick := time.NewTicker(250 * time.Millisecond)
+	// The tick runs at tickFast only while something is moving (a fade, a
+	// blackout, an audio ramp, a running action) and at tickSlow otherwise:
+	// each one reads a handful of files, and at 4 Hz that kept the laptop's
+	// CPU waking ~100 times a second. An arrival while away ticks at once.
+	const tickFast, tickSlow = 250 * time.Millisecond, time.Second
+	tick := time.NewTicker(tickFast)
 	defer tick.Stop()
 	hist := newHistory(filepath.Join(filepath.Dir(c.statusFile), "history.json"), 500*time.Millisecond, 120)
 	log.Printf("deskpresence up: sensor=%s absence=%s blackout=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.sensor, c.absence, c.blackout, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
@@ -238,6 +243,9 @@ func main() {
 			}
 			staleNoted = false
 			everSeen = true
+			if pr, known := pol.Present(); flipped && (!known || !pr) {
+				tick.Reset(time.Millisecond) // the tick resets the period itself
+			}
 		case a := <-done:
 			act.busy = false
 			log.Printf("actuator: %s finished, tv=%q", a, act.tvState())
@@ -391,6 +399,12 @@ func main() {
 					h.publish("status", json.RawMessage(s))
 				}
 				lastStatus, lastWrite = s, now
+			}
+			lvl := pol.FadeLevel(now)
+			if act.busy || blackingOut || lvl > 0 && lvl < 1 || snd != nil && snd.level > 0 {
+				tick.Reset(tickFast)
+			} else {
+				tick.Reset(tickSlow)
 			}
 		}
 	}
