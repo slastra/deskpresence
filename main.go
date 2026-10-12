@@ -194,11 +194,8 @@ func main() {
 		flips             int
 		gateOpened        time.Time // the sensor gets -stale to report after waking
 	)
-	// The tick runs at tickFast only while something is moving (a fade, a
-	// blackout, an audio ramp, a running action) and at tickSlow otherwise:
-	// each one reads a handful of files, and at 4 Hz that kept the laptop's
-	// CPU waking ~100 times a second. An arrival while away ticks at once.
-	const tickFast, tickSlow = 250 * time.Millisecond, time.Second
+	// The tick's period comes from tickPeriod; arrivals and input writes
+	// tick at once whatever it is.
 	tick := time.NewTicker(tickFast)
 	defer tick.Stop()
 	inputChanged := watchInput(ctx, c.inputFile)
@@ -255,6 +252,7 @@ func main() {
 		case a := <-done:
 			act.busy = false
 			log.Printf("actuator: %s finished, tv=%q", a, act.tvState())
+			tick.Reset(time.Millisecond) // a decision held while it ran goes out now
 		case s := <-sleep:
 			if s.before {
 				log.Printf("sleep: powering TV off before suspend")
@@ -403,12 +401,7 @@ func main() {
 				}
 				lastStatus, lastWrite = s, now
 			}
-			lvl := pol.FadeLevel(now)
-			if act.busy || blackingOut || lvl > 0 && lvl < 1 || snd.Level() > 0 {
-				tick.Reset(tickFast)
-			} else {
-				tick.Reset(tickSlow)
-			}
+			tick.Reset(tickPeriod(pol.FadeLevel(now), snd.Level()))
 		}
 	}
 }
@@ -868,6 +861,24 @@ const statusHeartbeat = 5 * time.Second
 
 // statusDue reports whether the status file should be written: on any
 // change, and at least every statusHeartbeat so its age means "alive".
+// The main loop ticks at tickFast while something is in motion and at
+// tickSlow otherwise: each tick reads a handful of files, and at a fixed
+// 4 Hz that kept the laptop's CPU waking ~100 times a second.
+const tickFast, tickSlow = 250 * time.Millisecond, time.Second
+
+// tickPeriod is the tick the loop needs now: fast only while the screen
+// fade or the audio fade runs (or a cancelled audio fade is being restored,
+// 0 < audio < 1), since those step on the tick. Not during the blackout or
+// the away state, where both sit at 1, nor while an action runs: nothing
+// changes there until an arrival, an input write or the action's finish,
+// and each of those ticks at once.
+func tickPeriod(fade, audio float64) time.Duration {
+	if fade > 0 && fade < 1 || audio > 0 && audio < 1 {
+		return tickFast
+	}
+	return tickSlow
+}
+
 func statusDue(s, last string, lastWrite, now time.Time) bool {
 	return s != last || now.Sub(lastWrite) >= statusHeartbeat
 }
