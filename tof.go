@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -115,11 +116,45 @@ func setToF(name string, on bool) error {
 	return os.WriteFile(filepath.Join(tofSysfs, name, "enable_sensor"), []byte(v), 0)
 }
 
+// sensorGate says whether the sensor should run. main closes it while input
+// is active: someone is typing, so presence is known without it, and the
+// laser ranging plus the hub's processing cost ~0.4 W on the laptop.
+type sensorGate struct {
+	on   atomic.Bool
+	wake chan struct{}
+}
+
+func newSensorGate() *sensorGate {
+	g := &sensorGate{wake: make(chan struct{}, 1)}
+	g.on.Store(true)
+	return g
+}
+
+// set reports whether the gate changed.
+func (g *sensorGate) set(on bool) bool {
+	if g.on.Swap(on) == on {
+		return false
+	}
+	select {
+	case g.wake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
 // readToF streams frames from the sensor, reconnecting on failure the way
-// readSerial does. The sensor is switched on only while it is being read.
-func readToF(ctx context.Context, out chan<- Frame) {
+// readSerial does. The sensor is switched on only while it is being read,
+// and only while the gate is open.
+func readToF(ctx context.Context, out chan<- Frame, gate *sensorGate) {
 	var lastErr string
 	for ctx.Err() == nil {
+		if !gate.on.Load() {
+			select {
+			case <-ctx.Done():
+			case <-gate.wake:
+			}
+			continue
+		}
 		name, err := findToF()
 		if err != nil {
 			warnOnce(&lastErr, "tof: "+err.Error())
@@ -139,10 +174,28 @@ func readToF(ctx context.Context, out chan<- Frame) {
 			continue
 		}
 		lastErr = ""
-		log.Printf("tof: reading /dev/%s", name)
-		err = streamToF(ctx, dev, out, tofHeartbeat)
+		// the session ends with ctx or when the gate closes
+		sctx, cancel := context.WithCancel(ctx)
+		go func() {
+			for {
+				select {
+				case <-sctx.Done():
+					return
+				case <-gate.wake:
+					if !gate.on.Load() {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		err = streamToF(sctx, dev, out, tofHeartbeat)
+		cancel()
 		dev.Close()
 		_ = setToF(name, false)
+		if ctx.Err() == nil && !gate.on.Load() {
+			continue // gated off, not a failure
+		}
 		if err != nil && ctx.Err() == nil {
 			log.Printf("tof: read: %v (reconnecting)", err)
 		}

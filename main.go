@@ -137,11 +137,13 @@ func main() {
 	// The ToF reader switches its sensor off on the way out; wait for that
 	// before exiting, or a stopped daemon leaves the sensor running.
 	readerDone := make(chan struct{})
+	var gate *sensorGate // ToF only: off while input is active
 	switch {
 	case c.replay != "":
 		go replayFrames(ctx, c.replay, frames)
 	case c.sensor == "tof":
-		go func() { readToF(ctx, frames); close(readerDone) }()
+		gate = newSensorGate()
+		go func() { readToF(ctx, frames, gate); close(readerDone) }()
 	case c.sensor == "ld2410":
 		go readSerial(ctx, c, frames, h)
 	default:
@@ -189,6 +191,7 @@ func main() {
 		everSeen          bool // never alert about a sensor that was never plugged in
 		flipWindow        time.Time
 		flips             int
+		gateOpened        time.Time // the sensor gets -stale to report after waking
 	)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -290,6 +293,16 @@ func main() {
 			} else {
 				inputUnknownSince = time.Time{}
 			}
+			// While input is active Want says "on" without the sensor, so it
+			// sleeps; it wakes when input goes quiet, ahead of any fade.
+			if gate != nil && gate.set(in != InputActive) {
+				if gate.on.Load() {
+					gateOpened = now
+					log.Printf("tof: input %s, sensor on", in)
+				} else {
+					log.Printf("tof: input active, sensor off")
+				}
+			}
 			want, why := pol.Want(now, in, map[bool]time.Duration{true: now.Sub(inputUnknownSince), false: 0}[!inputUnknownSince.IsZero()])
 			if paused != pausedNoted {
 				if paused && !hold.IsZero() {
@@ -348,7 +361,8 @@ func main() {
 			blackingOut = pol.InBlackout(want, why, now)
 			want, why = pol.HoldBlack(want, why, now)
 			{
-				if pol.SensorStale(now) {
+				gated := gate != nil && (!gate.on.Load() || now.Sub(gateOpened) < c.stale)
+				if pol.SensorStale(now) && !gated {
 					if !staleNoted {
 						log.Printf("sensor: no frames for %s, input idle decides", c.stale)
 						staleNoted = true
