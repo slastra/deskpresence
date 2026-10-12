@@ -4,6 +4,10 @@ After=graphical-session.target
 
 [Service]
 ExecStart=%h/go/bin/deskpresence -near-gates 2 -energy-min 40 -absence 30s -fade 8s -blackout 10m -max-distance 150 -hooks "%h/.config/deskpresence/light-hook {},%h/.config/deskpresence/emotune-hook {}"
+# One P for the Go runtime: every serial read is a blocking syscall, and with
+# more Ps the runtime handed each one across threads (~470 -> ~220 wakeups/s
+# with the read coalescing, measured on the desk).
+Environment=GOMAXPROCS=1
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM

@@ -509,6 +509,11 @@ func (a *actuator) hook(h, action string) {
 
 // --- serial ---------------------------------------------------------------
 
+// serialCoalesce is how long the radar reader waits after a short read
+// before the next: under half a frame, so nothing is ever dropped or late by
+// more than that.
+const serialCoalesce = 40 * time.Millisecond
+
 func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 	var lastErr string
 	for ctx.Err() == nil {
@@ -547,6 +552,12 @@ func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 				case out <- f:
 				default: // consumer is behind; drop, the next frame is 100ms away
 				}
+			}
+			// The CP2102 hands a frame over in USB-sized pieces, ~8 reads per
+			// 100 ms frame. Let the rest of it land in the tty buffer first:
+			// a frame costs one or two reads, at most serialCoalesce late.
+			if n < len(buf) {
+				sleepCtx(ctx, serialCoalesce)
 			}
 		}
 		port.Close()
