@@ -221,6 +221,10 @@ A sensitivity of 100 disables a gate. Settings persist in the module.
     install -Dm644 systemd/deskpresence.service -t ~/.config/systemd/user/
     systemctl --user enable --now deskpresence
 
+On the laptop (the ToF sensor) install its unit under the same name:
+
+    install -Dm644 systemd/deskpresence-tof.service ~/.config/systemd/user/deskpresence.service
+
 Edit the `ExecStart` flags in the unit to your calibrated values. While
 tuning:
 

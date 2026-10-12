@@ -1,0 +1,20 @@
+# The laptop's deskpresence: the desk's daemon on the Lenovo VL53L1 ToF
+# sensor instead of the LD2410 radar. Away 30 s (plus the sensor's own ~6 s
+# hysteresis) -> screen off via laptop-screen.sh, with an 8 s fade first.
+# No -hooks: there is no office light here. Installed as deskpresence.service.
+[Unit]
+Description=deskpresence: ToF laptop presence -> screen on/off
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/go/bin/deskpresence -sensor tof -near-gates 0 -max-distance 0 -absence 30s -fade 8s -script %h/.config/hypr/scripts/laptop-screen.sh -state %h/.local/state/laptop-screen/state -alert-text "Presence sensor offline."
+# One P for the Go runtime: the sensor's blocking read otherwise hands every
+# report across OS threads, ~46 -> ~28 wakeups/s on battery.
+Environment=GOMAXPROCS=1
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
