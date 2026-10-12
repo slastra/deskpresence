@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // Input is how recently someone touched the keyboard or mouse, as hypridle
@@ -95,4 +101,48 @@ func runInput(args []string, path string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// watchInput signals whenever the input file is written, so a touch reaches
+// the policy at once rather than on the next tick (up to a second while
+// nothing moves). It watches the directory, since runInput replaces the
+// file by rename. The inotify fd is non-blocking, so the read parks on the
+// netpoller instead of holding a thread. If inotify is unavailable the
+// channel is nil, which never fires: the tick still reads the file.
+func watchInput(ctx context.Context, path string) <-chan struct{} {
+	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
+	if err != nil {
+		log.Printf("input: no inotify (%v), polling on the tick", err)
+		return nil
+	}
+	if _, err := unix.InotifyAddWatch(fd, filepath.Dir(path), unix.IN_MOVED_TO|unix.IN_CLOSE_WRITE); err != nil {
+		unix.Close(fd)
+		log.Printf("input: cannot watch %s (%v), polling on the tick", filepath.Dir(path), err)
+		return nil
+	}
+	f := os.NewFile(uintptr(fd), "inotify")
+	go func() { <-ctx.Done(); f.Close() }()
+	ch := make(chan struct{}, 1)
+	name := []byte(filepath.Base(path))
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := f.Read(buf)
+			if err != nil {
+				return // closed on shutdown
+			}
+			for off := 0; off+unix.SizeofInotifyEvent <= n; {
+				ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
+				end := off + unix.SizeofInotifyEvent + int(ev.Len)
+				if bytes.Equal(bytes.TrimRight(buf[off+unix.SizeofInotifyEvent:min(end, n)], "\x00"), name) {
+					select {
+					case ch <- struct{}{}:
+					default: // a wake is already pending
+					}
+				}
+				off = end
+			}
+		}
+	}()
+	return ch
 }

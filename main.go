@@ -201,6 +201,7 @@ func main() {
 	const tickFast, tickSlow = 250 * time.Millisecond, time.Second
 	tick := time.NewTicker(tickFast)
 	defer tick.Stop()
+	inputChanged := watchInput(ctx, c.inputFile)
 	hist := newHistory(filepath.Join(filepath.Dir(c.statusFile), "history.json"), 500*time.Millisecond, 120)
 	log.Printf("deskpresence up: sensor=%s absence=%s blackout=%s debounce=%s near-gates=%d energy-min=%d max=%dcm tv=%q dry-run=%v", c.sensor, c.absence, c.blackout, c.debounce, c.nearGates, c.energyMin, c.maxDistance, act.tvState(), c.dryRun)
 
@@ -249,6 +250,8 @@ func main() {
 			if pr, known := pol.Present(); flipped && (!known || !pr) {
 				tick.Reset(time.Millisecond) // the tick resets the period itself
 			}
+		case <-inputChanged:
+			tick.Reset(time.Millisecond) // read it now; the tick resets the period
 		case a := <-done:
 			act.busy = false
 			log.Printf("actuator: %s finished, tv=%q", a, act.tvState())
