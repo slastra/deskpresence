@@ -290,7 +290,9 @@ function distChart(c, maxCM) {
   g.font = '11px ' + css('--mono'); g.textBaseline = 'middle';
   g.strokeStyle = css('--line'); g.lineWidth = 1;
   for (const s of TICKS) { const x = Math.round(xOf(N - 1 - s * 10, w)) + .5; g.beginPath(); g.moveTo(x, T); g.lineTo(x, h - B); g.stroke(); }
-  for (let cm = 0; cm <= maxCM - GATE_CM; cm += 2 * GATE_CM) {
+  // gridlines every other radar gate, or every 25 cm on a short-range sensor
+  const step = maxCM > 300 ? 2 * GATE_CM : 25;
+  for (let cm = 0; cm <= maxCM - step / 2; cm += step) {
     g.strokeStyle = css('--line'); g.beginPath(); g.moveTo(L, yOf(cm) + .5); g.lineTo(w - R, yOf(cm) + .5); g.stroke();
     g.fillStyle = css('--text-muted'); g.textAlign = 'right'; g.fillText(cm, L - 6, yOf(cm));
   }
@@ -348,7 +350,7 @@ function draw() {
   const G = gateCount();
   heatmap(cv.mv, 'mg', RAMP_MV, params?.MovingSens, G);
   heatmap(cv.st, 'sg', RAMP_ST, params?.StaticSens, G);
-  distChart(cv.d, G * GATE_CM); bandChart(cv.b); table(G); stats();
+  distChart(cv.d, rule?.range_cm || G * GATE_CM); bandChart(cv.b); table(G); stats();
 }
 draw();
 addEventListener('resize', () => dirty = true);

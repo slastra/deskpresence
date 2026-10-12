@@ -34,6 +34,7 @@ const (
 	// event u8, an 8-byte stamp, four u32 custom timing fields, then the
 	// three that matter here.
 	tofDistanceAt = 26 // u32, mm; 1500 means nothing in range
+	tofRangeCM    = 150
 	tofPresentAt  = 31 // u8, 0 or 1
 	tofReportMin  = 32
 	// The sensor is silent while nothing changes, and the policy calls a

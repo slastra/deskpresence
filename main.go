@@ -142,6 +142,7 @@ func main() {
 	case c.replay != "":
 		go replayFrames(ctx, c.replay, frames)
 	case c.sensor == "tof":
+		pol.RangeCM = tofRangeCM
 		gate = newSensorGate()
 		go func() { readToF(ctx, frames, gate); close(readerDone) }()
 	case c.sensor == "ld2410":
@@ -681,7 +682,7 @@ func status(p *Policy, a *actuator, fl *floorLearner, f Frame, now time.Time, pa
 		"rule": map[string]any{"near_gates": p.NearGates, "energy_min": p.EnergyMin,
 			"absence_ms": p.Absence.Milliseconds(), "fade_ms": p.Fade.Milliseconds(), "blackout_ms": p.Blackout.Milliseconds(), "max_distance": p.MaxDistance,
 			"confirm_frames": p.ConfirmFrames, "confirm_window_ms": p.ConfirmWindow.Milliseconds(),
-			"floor_learned": learned, "floor_frames": floorFrames},
+			"floor_learned": learned, "floor_frames": floorFrames, "range_cm": p.RangeCM},
 		"present": pr,
 		"known":   known,
 		"since":   p.PresentSince().UnixMilli(),

@@ -26,6 +26,9 @@ type Policy struct {
 	// ignored. NearGates 0 disables this and falls back to MaxDistance.
 	NearGates int
 	EnergyMin int
+	// RangeCM is the sensor's reach, reported for the live view's distance
+	// axis; 0 means the radar's gates set it.
+	RangeCM uint16
 	// Fade is how long before Absence the screen should start going dark:
 	// a visible warning that the desk reads as empty, cheap to cancel with
 	// one breath. 0 disables.
