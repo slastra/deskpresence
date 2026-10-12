@@ -219,7 +219,9 @@ func main() {
 			now := time.Now()
 			flipped := pol.Observe(f, now)
 			h.publish("frame", toEvent(f, now))
-			hist.observe(f, c.nearGates, now)
+			if pr, known := pol.Present(); known {
+				hist.observe(f, c.nearGates, pr, pol.EnergyMin, now)
+			}
 			// Confidently empty: the radar's own away with the TV off, or an
 			// hour without input. Only these teach the floor.
 			if pr, known := pol.Present(); len(f.MovingGates) > 0 &&
@@ -390,9 +392,6 @@ func main() {
 					act.busy = true
 					go func() { act.run(a); done <- a }()
 				}
-			}
-			if pr, known := pol.Present(); known {
-				hist.tick(now, pr, pol.EnergyMin)
 			}
 			if s := status(pol, act, floor, lastFrame, now, paused, hold, audioOn, in, want); statusDue(s, lastStatus, lastWrite, now) {
 				writeStatus(c.statusFile, s)
