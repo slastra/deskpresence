@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,7 +28,9 @@ type audio struct {
 	mu      sync.Mutex
 	exclude []string           // application.name substrings left alone (UI cues)
 	orig    map[string]float64 // application.name -> original volume, while faded
-	level   float64            // last applied fade level
+	// level is the last applied fade level, as float64 bits. Atomic so the
+	// main loop can read it while rampUp holds mu for seconds.
+	level atomic.Uint64
 }
 
 func newAudio(exclude string) *audio {
@@ -100,7 +104,7 @@ func (a *audio) apply(level float64) {
 		return
 	}
 	defer a.mu.Unlock()
-	if level == a.level {
+	if level == a.Level() {
 		return
 	}
 	if level > 0 && len(a.orig) == 0 {
@@ -114,7 +118,7 @@ func (a *audio) apply(level float64) {
 		}
 	}
 	a.setAll(1 - level)
-	a.level = level
+	a.setLevel(level)
 	if level == 0 {
 		if len(a.orig) > 0 {
 			log.Printf("audio: restored")
@@ -132,7 +136,7 @@ func (a *audio) rampUp(d time.Duration) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.orig) == 0 {
-		a.level = 0
+		a.setLevel(0)
 		return
 	}
 	const steps = 8
@@ -148,5 +152,16 @@ func (a *audio) rampUp(d time.Duration) {
 	}
 	log.Printf("audio: ramped %v back up", a.orig)
 	a.orig = map[string]float64{}
-	a.level = 0
+	a.setLevel(0)
 }
+
+// Level is the fade level last applied: 0 full volume, 1 silent. Safe from
+// any goroutine; 0 when audio follow is off (a nil *audio).
+func (a *audio) Level() float64 {
+	if a == nil {
+		return 0
+	}
+	return math.Float64frombits(a.level.Load())
+}
+
+func (a *audio) setLevel(v float64) { a.level.Store(math.Float64bits(v)) }

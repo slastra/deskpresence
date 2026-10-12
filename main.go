@@ -330,7 +330,7 @@ func main() {
 			audioOn := !flagOff(c.audioFlag)
 			if audioOn != audioNoted {
 				log.Printf("audio follow: %v", audioOn)
-				if !audioOn && snd != nil && snd.level > 0 {
+				if !audioOn && snd.Level() > 0 {
 					go snd.rampUp(1500 * time.Millisecond)
 				}
 				audioNoted = audioOn
@@ -354,7 +354,7 @@ func main() {
 			// the way back, so skip apply until it has cleared the snapshot.
 			if pr, known := pol.Present(); known && pr && !paused && in != InputActive && audioOn && snd != nil {
 				lvl := pol.FadeLevel(now)
-				if lvl > 0 && lvl < 1 || lvl == 0 && snd.level > 0 && snd.level < 1 {
+				if lvl > 0 && lvl < 1 || lvl == 0 && snd.Level() > 0 && snd.Level() < 1 {
 					snd.apply(lvl) // rising, or cancelled mid-fade (restore)
 				}
 			}
@@ -401,7 +401,7 @@ func main() {
 				lastStatus, lastWrite = s, now
 			}
 			lvl := pol.FadeLevel(now)
-			if act.busy || blackingOut || lvl > 0 && lvl < 1 || snd != nil && snd.level > 0 {
+			if act.busy || blackingOut || lvl > 0 && lvl < 1 || snd.Level() > 0 {
 				tick.Reset(tickFast)
 			} else {
 				tick.Reset(tickSlow)
