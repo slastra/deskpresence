@@ -113,7 +113,14 @@ func setToF(name string, on bool) error {
 	if on {
 		v = "1"
 	}
-	return os.WriteFile(filepath.Join(tofSysfs, name, "enable_sensor"), []byte(v), 0)
+	path := filepath.Join(tofSysfs, name, "enable_sensor")
+	// hid_sensor_custom answers EINVAL to a write of the state it is already
+	// in, which a reader killed before it could switch the sensor off leaves
+	// behind: every reconnect then fails.
+	if cur, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(cur)) == v {
+		return nil
+	}
+	return os.WriteFile(path, []byte(v), 0)
 }
 
 // sensorGate says whether the sensor should run. main closes it while input
