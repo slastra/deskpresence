@@ -25,6 +25,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"go.bug.st/serial"
+	"golang.org/x/sys/unix"
 )
 
 type config struct {
@@ -504,10 +505,31 @@ func (a *actuator) hook(h, action string) {
 
 // --- serial ---------------------------------------------------------------
 
-// serialCoalesce is how long the radar reader waits after a short read
-// before the next: under half a frame, so nothing is ever dropped or late by
-// more than that.
-const serialCoalesce = 40 * time.Millisecond
+// basicFrameLen is a basic-mode frame on the wire (header, length, 13
+// payload bytes, footer), the shortest the radar sends.
+const basicFrameLen = 23
+
+// setReadMin sets VMIN on the tty behind f, leaving the rest of the line
+// setup (the library's 256000-baud termios2) as it is. Through SyscallConn:
+// f.Fd() would put the descriptor back into blocking mode.
+func setReadMin(f *os.File, n byte) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ierr error
+	if err := rc.Control(func(fd uintptr) {
+		var t *unix.Termios
+		if t, ierr = unix.IoctlGetTermios(int(fd), unix.TCGETS2); ierr != nil {
+			return
+		}
+		t.Cc[unix.VMIN], t.Cc[unix.VTIME] = n, 0
+		ierr = unix.IoctlSetTermios(int(fd), unix.TCSETS2, t)
+	}); err != nil {
+		return err
+	}
+	return ierr
+}
 
 func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 	var lastErr string
@@ -518,8 +540,21 @@ func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
+		// Frames are read through our own non-blocking handle, so a read
+		// parks on Go's netpoller instead of the library's select() holding
+		// an OS thread. It has to be opened before serial.Open, which takes
+		// the tty exclusively (TIOCEXCL refuses later opens). The library
+		// still owns the line setup: termios belongs to the tty, so its
+		// raw 256000-baud mode applies to this handle too.
+		rf, err := os.OpenFile(dev, os.O_RDONLY|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			warnOnce(&lastErr, fmt.Sprintf("serial: open %s: %v", dev, err))
+			sleepCtx(ctx, 5*time.Second)
+			continue
+		}
 		port, err := serial.Open(dev, &serial.Mode{BaudRate: c.baud})
 		if err != nil {
+			rf.Close()
 			warnOnce(&lastErr, fmt.Sprintf("serial: open %s: %v", dev, err))
 			sleepCtx(ctx, 5*time.Second)
 			continue
@@ -533,13 +568,22 @@ func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 			log.Printf("serial: engineering mode on, static thresholds %v, moving %v", prm.StaticSens, prm.MovingSens)
 		}
 		log.Printf("serial: reading %s at %d", dev, c.baud)
-		_ = port.SetReadTimeout(time.Second)
+		// The CP2102 hands a frame over in USB-sized pieces, ~8 per 100 ms
+		// frame. With VTIME 0, n_tty reports the tty readable to epoll only
+		// once VMIN bytes are queued, so VMIN is kept at what the next frame
+		// still needs: one wakeup per frame, and a read that ends mid-frame
+		// realigns on the next instead of leaving every frame a frame late.
+		vmin, vminOK := 0, true
+		stop := context.AfterFunc(ctx, func() { rf.Close() }) // unblocks the read
 		var p Parser
 		buf := make([]byte, 512)
-		for ctx.Err() == nil {
-			n, err := port.Read(buf)
+		for {
+			// An unplug hangs the tty up: EOF or EIO, never a silent block.
+			n, err := rf.Read(buf)
 			if err != nil {
-				log.Printf("serial: read: %v (reconnecting)", err)
+				if ctx.Err() == nil {
+					log.Printf("serial: read: %v (reconnecting)", err)
+				}
 				break
 			}
 			for _, f := range p.Feed(buf[:n]) {
@@ -548,13 +592,16 @@ func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 				default: // consumer is behind; drop, the next frame is 100ms away
 				}
 			}
-			// The CP2102 hands a frame over in USB-sized pieces, ~8 reads per
-			// 100 ms frame. Let the rest of it land in the tty buffer first:
-			// a frame costs one or two reads, at most serialCoalesce late.
-			if n < len(buf) {
-				sleepCtx(ctx, serialCoalesce)
+			if need := p.Need(); vminOK && need != vmin {
+				if err := setReadMin(rf, byte(need)); err != nil {
+					log.Printf("serial: VMIN: %v (waking per USB chunk)", err)
+					vminOK = false
+				}
+				vmin = need
 			}
 		}
+		stop()
+		rf.Close()
 		port.Close()
 		sleepCtx(ctx, 2*time.Second)
 	}

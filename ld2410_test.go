@@ -28,3 +28,28 @@ func TestParserSkipsAck(t *testing.T) {
 		t.Fatalf("got %+v", fs)
 	}
 }
+
+// Need drives the tty's VMIN: a whole frame when aligned, the rest of the
+// frame when a read ended mid-frame, never 0.
+func TestParserNeed(t *testing.T) {
+	var p Parser
+	f := basicFrame(3, 120, 130, 55, 80)
+	if len(f) != basicFrameLen {
+		t.Fatalf("basic frame is %d bytes, basicFrameLen says %d", len(f), basicFrameLen)
+	}
+	if p.Need() != basicFrameLen {
+		t.Fatalf("before any frame Need = %d, want %d", p.Need(), basicFrameLen)
+	}
+	p.Feed(f)
+	if p.Need() != len(f) {
+		t.Fatalf("aligned Need = %d, want %d", p.Need(), len(f))
+	}
+	p.Feed(f[:9])
+	if p.Need() != len(f)-9 {
+		t.Fatalf("mid-frame Need = %d, want %d", p.Need(), len(f)-9)
+	}
+	p.Feed(f[9:])
+	if p.Need() != len(f) {
+		t.Fatalf("realigned Need = %d, want %d", p.Need(), len(f))
+	}
+}

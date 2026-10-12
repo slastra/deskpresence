@@ -55,7 +55,20 @@ var (
 // Feed it whatever the serial port hands you; it yields complete frames and
 // silently skips config/ack frames (FD FC FB FA) and garbage.
 type Parser struct {
-	buf []byte
+	buf      []byte
+	frameLen int // wire length of the last frame parsed, 0 before the first
+}
+
+// Need is how many more bytes complete the next frame, assuming it is as
+// long as the last one: a whole frame when nothing is held, the rest of it
+// when a read ended mid-frame. Before the first frame it is a basic frame,
+// the shortest the radar sends. Always 1..frame length.
+func (p *Parser) Need() int {
+	l := p.frameLen
+	if l == 0 {
+		l = basicFrameLen
+	}
+	return max(1, l-len(p.buf))
 }
 
 func (p *Parser) Feed(b []byte) []Frame {
@@ -105,6 +118,7 @@ func (p *Parser) Feed(b []byte) []Frame {
 			}
 		}
 		out = append(out, f)
+		p.frameLen = total
 		p.buf = p.buf[total:]
 	}
 }
