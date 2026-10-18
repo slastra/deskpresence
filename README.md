@@ -42,7 +42,9 @@ first few gates, the ones that cover the chair:
   empty: its own "away" with the TV off, or an hour without input. The
   threshold is that noise's 99.5th percentile plus 4, never under
   `-energy-min` and never over 70, once 3000 frames (five minutes) are
-  held. It is saved in `-floor-file` and every change is logged.
+  held. It is saved in `-floor-file` and every change is logged. When a
+  long sit at the desk ages those frames out, the last learned threshold
+  stands until fresh ones replace it, rather than dropping to the minimum.
 - **Radar out** when the sensor has been silent for `-stale` (5 s). Input idle
   decides: on while the keyboard or mouse was used in the last 10 minutes,
   off after that. It no longer holds the TV in whatever state it was.
@@ -196,7 +198,9 @@ frame over 38 every 10 to 20 s, so the verdict never went away. A
 | two frames at 45 within 4 s | 8, the longest quiet stretch 293 s | 17.6 s |
 
 Hence the unit file's `-energy-min 40 -absence 30s -fade 8s`, with the
-learned threshold (45 from that recording) on top. An away timer longer
+learned threshold (45 from that recording) on top. On 2026-10-18 the empty
+room read a median of 26 and peaks of 44 in gate 1 (32 at the 99th
+percentile the evening before), so the unit's minimum is now 46. An away timer longer
 than a minute would rarely expire in an empty room, so the daemon clamps it
 at 60 s; long still stretches are what `hold` and input activity are for.
 Static energy does not help here: the module reports none for gates 0 and

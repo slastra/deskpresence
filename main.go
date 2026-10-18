@@ -124,7 +124,11 @@ func main() {
 	floor := newFloorLearner(c.floorFile, c.energyMin)
 	if t, n, ok := floor.threshold(); ok {
 		pol.EnergyMin = t
-		log.Printf("floor: threshold %d from %d empty-room frames", t, n)
+		if n < floor.minFrames {
+			log.Printf("floor: threshold %d, remembered (%d fresh empty-room frames)", t, n)
+		} else {
+			log.Printf("floor: threshold %d from %d empty-room frames", t, n)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

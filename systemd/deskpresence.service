@@ -3,7 +3,7 @@ Description=deskpresence: mmWave desk presence -> TV on/off
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/go/bin/deskpresence -near-gates 2 -energy-min 40 -absence 30s -fade 8s -blackout 10m -max-distance 150 -hooks "%h/.config/deskpresence/light-hook {},%h/.config/deskpresence/emotune-hook {}"
+ExecStart=%h/go/bin/deskpresence -near-gates 2 -energy-min 46 -absence 30s -fade 8s -blackout 10m -max-distance 150 -hooks "%h/.config/deskpresence/light-hook {},%h/.config/deskpresence/emotune-hook {}"
 # One P for the Go runtime, so the radar's 10 frames a second don't wake
 # several threads each. With the reads on the netpoller and VMIN at one
 # frame, ~470 -> ~80 wakeups/s measured on the desk.

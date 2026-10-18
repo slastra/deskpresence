@@ -20,6 +20,13 @@ import (
 // 99.5th percentile of the last six hours of those frames plus a margin,
 // clamped: it can rise with the noise and fall back when the noise does, but
 // never below the configured minimum.
+//
+// Six hours at the desk age every empty frame out, and with no opinion the
+// threshold fell back to the minimum: the morning after a long sit, room
+// noise that had been learned away was presence again, and the verdict
+// flapped away and back every few seconds (2026-10-18). So the last learned
+// threshold is kept, and saved, until there are enough fresh frames to
+// replace it.
 type floorLearner struct {
 	path      string
 	slot      time.Duration
@@ -30,6 +37,7 @@ type floorLearner struct {
 	min, max  int
 	hist      map[int64]*[101]int
 	lastSlot  int64
+	learned   int // the last threshold learned from enough frames; 0 = never
 }
 
 func newFloorLearner(path string, min int) *floorLearner {
@@ -63,7 +71,7 @@ func (f *floorLearner) observe(e int, now time.Time) {
 }
 
 // threshold is the learned threshold and how many frames it rests on; ok is
-// false until there are enough.
+// false until there are enough, unless an earlier threshold is remembered.
 func (f *floorLearner) threshold() (t, frames int, ok bool) {
 	var sum [101]int
 	for _, h := range f.hist {
@@ -73,17 +81,22 @@ func (f *floorLearner) threshold() (t, frames int, ok bool) {
 		}
 	}
 	if frames < f.minFrames {
+		if f.learned > 0 {
+			return max(f.min, min(f.max, f.learned)), frames, true
+		}
 		return f.min, frames, false
 	}
 	need := int(float64(frames) * f.quantile)
 	acc := 0
+	f.learned = f.max
 	for i, n := range sum {
 		acc += n
 		if acc >= need {
-			return max(f.min, min(f.max, i+f.margin)), frames, true
+			f.learned = max(f.min, min(f.max, i+f.margin))
+			break
 		}
 	}
-	return f.max, frames, true
+	return f.learned, frames, true
 }
 
 func (f *floorLearner) save() {
@@ -91,7 +104,7 @@ func (f *floorLearner) save() {
 	for k, h := range f.hist {
 		out[strconv.FormatInt(k, 10)] = *h
 	}
-	b, _ := json.Marshal(map[string]any{"slot_ms": f.slot.Milliseconds(), "slots": out})
+	b, _ := json.Marshal(map[string]any{"slot_ms": f.slot.Milliseconds(), "slots": out, "learned": f.learned})
 	_ = os.MkdirAll(filepath.Dir(f.path), 0o755)
 	tmp := f.path + ".tmp"
 	if os.WriteFile(tmp, b, 0o644) == nil {
@@ -105,12 +118,14 @@ func (f *floorLearner) load() {
 		return
 	}
 	var in struct {
-		SlotMs int64            `json:"slot_ms"`
-		Slots  map[string][]int `json:"slots"`
+		SlotMs  int64            `json:"slot_ms"`
+		Slots   map[string][]int `json:"slots"`
+		Learned int              `json:"learned"`
 	}
 	if json.Unmarshal(b, &in) != nil || in.SlotMs != f.slot.Milliseconds() {
 		return
 	}
+	f.learned = in.Learned
 	now := time.Now().UnixMilli() / f.slot.Milliseconds()
 	for k, v := range in.Slots {
 		s, err := strconv.ParseInt(k, 10, 64)

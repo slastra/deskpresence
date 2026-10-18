@@ -49,10 +49,23 @@ func TestFloorSaveLoadAndAge(t *testing.T) {
 	if th, n, ok := g.threshold(); !ok || th != 54 || n < 3000 {
 		t.Fatalf("reloaded: got %d/%d/%v", th, n, ok)
 	}
-	// Seven hours on, the old slots have aged out.
+	// Seven hours on, the old slots have aged out, but what they taught is
+	// remembered, across a restart too, until fresh frames replace it.
 	g.observe(20, now.Add(7*time.Hour))
-	if _, n, ok := g.threshold(); ok || n != 1 {
-		t.Fatalf("aged: got %d frames ok=%v, want 1 and no opinion", n, ok)
+	if th, n, ok := g.threshold(); !ok || th != 54 || n != 1 {
+		t.Fatalf("aged: got %d/%d/%v, want 54 remembered from 1 frame", th, n, ok)
+	}
+	g.observe(20, now.Add(7*time.Hour+10*time.Minute)) // a new slot saves
+	h := newFloorLearner(path, 40)
+	if th, _, ok := h.threshold(); !ok || th != 54 {
+		t.Fatalf("remembered after reload: got %d/%v", th, ok)
+	}
+	if th, _, _ := newFloorLearner(path, 60).threshold(); th != 60 {
+		t.Fatalf("a remembered threshold under a raised minimum: got %d, want 60", th)
+	}
+	fill(h, now.Add(7*time.Hour+10*time.Minute), map[int]int{30: 3000})
+	if th, _, ok := h.threshold(); !ok || th != 40 {
+		t.Fatalf("fresh quiet frames replace it: got %d/%v, want 40", th, ok)
 	}
 }
 
