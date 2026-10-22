@@ -355,6 +355,13 @@ A watchdog on hypridle's 10-minute listener that blanks the TV only when
 this daemon is dead (its status file is older than 15 s) is the one
 exception worth having.
 
+## Development
+
+`go test ./...` covers the policy, the floor learner, the hook gate and the
+parser, but not the tick loop in `main()`, which wires them together. It is
+due to move into a struct the tests can drive, after a golden test that
+replays a `-replay` scenario through it and pins the log.
+
 ## Licence
 
 MIT.
