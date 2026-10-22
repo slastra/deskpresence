@@ -201,7 +201,11 @@ frame over 38 every 10 to 20 s, so the verdict never went away. A
 Hence the unit file's `-energy-min 40 -absence 30s -fade 8s`, with the
 learned threshold (45 from that recording) on top. On 2026-10-18 the empty
 room read a median of 26 and peaks of 44 in gate 1 (32 at the 99th
-percentile the evening before), so the unit's minimum is now 46. An away timer longer
+percentile the evening before), so the unit's minimum went to 46. That spike passed,
+and the learner had been reading arrival and input-away body frames as empty room; with
+those kept out (`floorTeaches`), the room learns about 33, and on 2026-10-21 the minimum
+went back to 40, checked by two hands-off minutes seated (held) and a walk-out (absent
+once the away timer ran, light off; light on 6 s after sitting back down). An away timer longer
 than a minute would rarely expire in an empty room, so the daemon clamps it
 at 60 s; long still stretches are what `hold` and input activity are for.
 Static energy does not help here: the module reports none for gates 0 and
