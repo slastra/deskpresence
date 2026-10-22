@@ -347,3 +347,93 @@ func TestBlackout(t *testing.T) {
 		t.Fatalf("stale radar during blackout: want off, got %q (%s)", got, why)
 	}
 }
+
+// hookFire is one hook action, at its offset from the run's start.
+type hookFire struct {
+	at   time.Duration
+	what string
+}
+
+// hookRun feeds a policy frames at 10 Hz and gives the hook gate each
+// frame's Want, as the loop's tick does; it returns what fired, and when.
+func hookRun(p *Policy, g *hookGate, t0 time.Time, n int, in func(i int) Input, frame func(i int) Frame) []hookFire {
+	var out []hookFire
+	for i := range n {
+		now := t0.Add(time.Duration(i) * 100 * time.Millisecond)
+		p.Observe(frame(i), now)
+		w, why := p.Want(now, in(i), 0)
+		if h := g.next(w, why, p.PresentSince(), p.ConfirmedAt(), now, 2*time.Minute, 5*time.Second); h != "" {
+			out = append(out, hookFire{now.Sub(t0), h})
+		}
+	}
+	return out
+}
+
+// newHookPolicy is a seated desk with the gate rule, the hooks told "on".
+// It returns the policy and gate once the desk has emptied and "off" has
+// fired, and the time of the next frame.
+func newHookPolicy(t *testing.T) (*Policy, *hookGate, time.Time) {
+	p := newTestPolicy()
+	p.NearGates, p.EnergyMin, p.ConfirmFrames, p.ConfirmWindow = 2, 45, 2, 4*time.Second
+	g := &hookGate{fired: "on"}
+	t0 := time.Unix(1000, 0)
+	quiet := func(int) Input { return InputQuiet }
+	hot := func(i int) Frame { return engFrame(map[bool]byte{true: 60, false: 20}[i < 20]) }
+	fired := hookRun(p, g, t0, 700, quiet, hot) // 2 s seated, then 68 s empty
+	if len(fired) != 1 || fired[0].what != "off" {
+		t.Fatalf("leaving: want one off, got %v", fired)
+	}
+	return p, g, t0.Add(70 * time.Second)
+}
+
+func TestHookGate(t *testing.T) {
+	quiet := func(int) Input { return InputQuiet }
+
+	// A phantom 30 s after leaving: two frames over the threshold, then a
+	// minute of nothing. The radar says present for a while; the light
+	// stays off.
+	p, g, t1 := newHookPolicy(t)
+	sawOn := false
+	phantom := func(i int) Frame {
+		if pr, _ := p.Present(); pr {
+			sawOn = true
+		}
+		return engFrame(map[bool]byte{true: 60, false: 20}[i == 300 || i == 303])
+	}
+	if fired := hookRun(p, g, t1, 1200, quiet, phantom); len(fired) != 0 {
+		t.Fatalf("phantom: want no hooks, got %v", fired)
+	}
+	if !sawOn {
+		t.Fatal("phantom: the radar never said present, the test proves nothing")
+	}
+
+	// A real return 30 s after leaving: continuous frames. "on" once
+	// presence has been renewed for the dwell.
+	p, g, t1 = newHookPolicy(t)
+	back := func(i int) Frame { return engFrame(map[bool]byte{true: 60, false: 20}[i >= 300]) }
+	fired := hookRun(p, g, t1, 400, quiet, back)
+	if len(fired) != 1 || fired[0].what != "on" {
+		t.Fatalf("real return: want one on, got %v", fired)
+	}
+	if late := fired[0].at - 30*time.Second; late > 5*time.Second+2400*time.Millisecond {
+		t.Fatalf("real return: on came %s after the first frame", late)
+	}
+
+	// Input wakes the desk the radar calls empty, then goes quiet: both
+	// fire at once, quick or not.
+	p, g, t1 = newHookPolicy(t)
+	in := func(i int) Input { return map[bool]Input{true: InputActive, false: InputQuiet}[i >= 10 && i < 210] }
+	fired = hookRun(p, g, t1, 400, in, func(int) Frame { return engFrame(20) })
+	if len(fired) != 2 || fired[0] != (hookFire{time.Second, "on"}) || fired[1].what != "off" || fired[1].at != 21*time.Second {
+		t.Fatalf("input active then quiet: want on at 1s and off at 21s, got %v", fired)
+	}
+
+	// An arrival long after the last "off" fires the moment the verdict
+	// does.
+	p, g, t1 = newHookPolicy(t)
+	late := func(i int) Frame { return engFrame(map[bool]byte{true: 60, false: 20}[i >= 3000]) }
+	fired = hookRun(p, g, t1, 3010, quiet, late)
+	if len(fired) != 1 || fired[0].what != "on" || fired[0].at != 300*time.Second+600*time.Millisecond {
+		t.Fatalf("first arrival: want on at 300.6s, got %v", fired)
+	}
+}

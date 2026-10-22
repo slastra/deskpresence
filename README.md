@@ -310,6 +310,12 @@ Hooks run in parallel with the actuator and each other, are bounded to
 30 s, and are never retried: presence is the truth, the log says what
 failed.
 
+A radar return within 2 min of the hooks' last `off` turns them `on` only
+once presence has kept being renewed for 5 s. A radar phantom is two
+frames and then nothing, and it used to flick the light on for the minute
+the away timer took to run out again; a seated person renews every couple
+of seconds. Input, a first arrival and `off` fire at once.
+
 
 **Actuator.** Any executable taking `on` or `off`. It should serialise on its
 own lock and write the state it achieved (`on` or `off`) to the `-state`

@@ -176,7 +176,7 @@ func main() {
 	// The hooks follow the decision, not the TV: during a blackout the desk
 	// is empty and the light should say so while the TV waits. Seeded from
 	// the TV so a restart does not replay a hello.
-	hookWant := act.tvState()
+	hooks := &hookGate{fired: act.tvState()}
 	done := make(chan string, 1)
 	var (
 		lastStatus  string
@@ -264,7 +264,7 @@ func main() {
 				if !act.busy {
 					act.busy = true
 					act.fireHooks("off")
-					hookWant = "off"
+					hooks.set("off", time.Now())
 					act.run("off") // synchronous: logind waits on our inhibitor
 					act.busy = false
 				}
@@ -371,9 +371,8 @@ func main() {
 			if paused && !(hold.IsZero() && in == InputAway) {
 				want = ""
 			}
-			if want != "" && want != hookWant {
-				act.fireHooks(want)
-				hookWant = want
+			if h := hooks.next(want, why, pol.PresentSince(), pol.ConfirmedAt(), now, hookQuick, hookDwell); h != "" {
+				act.fireHooks(h)
 			}
 			want, why = pol.HoldBlack(want, why, now)
 			{
@@ -465,6 +464,11 @@ func (a *actuator) run(action string) {
 	}
 	log.Printf("actuator: %s %s in %s", action, actuatorOutcome(code), took)
 }
+
+// hookQuick and hookDwell are the hook gate's: a radar return within
+// hookQuick of the hooks' last "off" fires once presence has been renewed
+// for hookDwell (see hookGate).
+const hookQuick, hookDwell = 2 * time.Minute, 5 * time.Second
 
 // actuatorTimeout bounds one tv-screen.sh run.
 const actuatorTimeout = 7 * time.Minute

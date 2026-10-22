@@ -193,6 +193,9 @@ func (p *Policy) FadeLevel(now time.Time) float64 {
 // PresentSince is when the debounced verdict last changed.
 func (p *Policy) PresentSince() time.Time { return p.presentAt }
 
+// ConfirmedAt is the last frame that renewed presence.
+func (p *Policy) ConfirmedAt() time.Time { return p.confirmedAt }
+
 func (p *Policy) SensorStale(now time.Time) bool {
 	return p.lastFrame.IsZero() || now.Sub(p.lastFrame) > p.StaleAfter
 }
@@ -223,7 +226,7 @@ func (p *Policy) Want(now time.Time, in Input, unknownFor time.Duration) (want, 
 			return "off", "no input signal for " + p.InputUnknownCap.String()
 		}
 		if p.present {
-			return "on", "radar present"
+			return "on", whyRadarPresent
 		}
 		return "off", whyRadarAway
 	}
@@ -239,7 +242,7 @@ func (p *Policy) Want(now time.Time, in Input, unknownFor time.Duration) (want, 
 	return "", "waiting for a verdict"
 }
 
-const whyRadarAway = "radar away"
+const whyRadarAway, whyRadarPresent = "radar away", "radar present"
 
 // HoldBlack applies Blackout to Want's answer: a radar "off" within
 // Blackout of the desk emptying becomes no opinion, so the TV stays as it
@@ -255,6 +258,44 @@ func (p *Policy) HoldBlack(want, why string, now time.Time) (string, string) {
 func (p *Policy) InBlackout(want, why string, now time.Time) bool {
 	return want == "off" && why == whyRadarAway && p.Blackout > 0 &&
 		!p.present && now.Sub(p.presentAt) < p.Blackout
+}
+
+// hookGate decides when the hooks hear Want's answer. They used to fire on
+// every change of it, and a radar phantom (two frames over the threshold,
+// then nothing) after the desk emptied turned the light back on for the
+// minute it took to latch away again: 81 quick off/on cycles in 48 h, 35
+// of them phantoms (2026-10-21). A dwell on "on" cannot tell them apart,
+// since a phantom holds "on" for the whole away timer; what differs is
+// renewal. A seated person re-confirms presence at least every ~2.4 s, a
+// phantom stops at its last frame. So a radar "on" that arrives within
+// quick of the last "off" fires only once presence has kept being
+// re-confirmed for dwell. "off", an "on" from input, and an arrival with
+// no recent "off" fire at once.
+type hookGate struct {
+	fired string    // the last on|off the hooks were given
+	offAt time.Time // when they were last given "off"
+}
+
+// next is what to fire now, if anything.
+func (g *hookGate) next(want, why string, presentAt, confirmedAt, now time.Time, quick, dwell time.Duration) string {
+	if want == "" || want == g.fired {
+		return ""
+	}
+	if want == "on" && why == whyRadarPresent && !g.offAt.IsZero() &&
+		presentAt.Sub(g.offAt) < quick && confirmedAt.Sub(presentAt) < dwell {
+		return ""
+	}
+	g.set(want, now)
+	return want
+}
+
+// set records that the hooks were given action (the sleep path fires "off"
+// itself).
+func (g *hookGate) set(action string, now time.Time) {
+	g.fired = action
+	if action == "off" {
+		g.offAt = now
+	}
 }
 
 // Decide turns Want's answer into an action given the TV state tv-screen.sh
