@@ -39,7 +39,8 @@ first few gates, the ones that cover the chair:
 - **The threshold learns the room.** The empty-room noise drifts (a 99.5th
   percentile of 27 after the module swap, 41 a week later), so the daemon
   keeps six hours of near-gate energy from moments it is sure the room is
-  empty: its own "away" with the TV off, or an hour without input. The
+  empty: its own "away" with the TV off (frames under the threshold only),
+  or an hour without input (every frame, so the threshold can rise). The
   threshold is that noise's 99.5th percentile plus 4, never under
   `-energy-min` and never over 70, once 3000 frames (five minutes) are
   held. It is saved in `-floor-file` and every change is logged. When a

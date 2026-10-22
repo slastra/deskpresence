@@ -104,3 +104,56 @@ func TestConfirmFrames(t *testing.T) {
 		t.Fatalf("a still reader's frame pairs lost presence")
 	}
 }
+
+// TestFloorTeaches: the radar's away teaches only frames under the
+// threshold with the TV off, so a body's frames at 100 no longer drag the
+// threshold to the cap; an hour without input teaches every frame, so the
+// threshold can still rise; the blackout, TV lit, teaches nothing.
+func TestFloorTeaches(t *testing.T) {
+	now := time.Now()
+	feed := func(f *floorLearner, counts map[int]int, known, present bool, tv string, in Input) {
+		for e, n := range counts {
+			for range n {
+				if floorTeaches(known, present, tv, in, e, 46) {
+					f.observe(e, now)
+				}
+			}
+		}
+	}
+	leak := map[int]int{20: 2970, 100: 30}
+
+	all := newFloorLearner(filepath.Join(t.TempDir(), "floor.json"), 46)
+	fill(all, now, leak)
+	if th, _, _ := all.threshold(); th != 70 {
+		t.Fatalf("control: every frame counted, got %d, want the 70 cap", th)
+	}
+	away := newFloorLearner(filepath.Join(t.TempDir(), "floor.json"), 46)
+	feed(away, leak, true, false, "off", InputQuiet)
+	feed(away, leak, true, false, "off", InputQuiet) // twice: past minFrames
+	if th, n, ok := away.threshold(); !ok || th != 46 || n != 5940 {
+		t.Fatalf("radar away: got %d/%d/%v, want the minimum from the 5940 quiet frames", th, n, ok)
+	}
+
+	noisy := newFloorLearner(filepath.Join(t.TempDir(), "floor.json"), 46)
+	feed(noisy, map[int]int{20: 2970, 60: 30}, true, true, "on", InputAway)
+	if th, _, ok := noisy.threshold(); !ok || th != 64 {
+		t.Fatalf("input away, radar present: got %d/%v, want 64", th, ok)
+	}
+
+	for _, tc := range []struct {
+		name           string
+		known, present bool
+		tv             string
+		in             Input
+		e              int
+	}{
+		{"blackout, TV on", true, false, "on", InputQuiet, 20},
+		{"radar away, TV off, at the threshold", true, false, "off", InputQuiet, 46},
+		{"radar present", true, true, "off", InputQuiet, 20},
+		{"no verdict yet", false, false, "off", InputIdle, 20},
+	} {
+		if floorTeaches(tc.known, tc.present, tc.tv, tc.in, tc.e, 46) {
+			t.Errorf("%s: taught the floor", tc.name)
+		}
+	}
+}

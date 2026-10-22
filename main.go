@@ -177,7 +177,6 @@ func main() {
 	// is empty and the light should say so while the TV waits. Seeded from
 	// the TV so a restart does not replay a hello.
 	hookWant := act.tvState()
-	blackingOut := false
 	done := make(chan string, 1)
 	var (
 		lastStatus  string
@@ -227,9 +226,10 @@ func main() {
 			}
 			// Confidently empty: the radar's own away with the TV off, or an
 			// hour without input. Only these teach the floor.
-			if pr, known := pol.Present(); len(f.MovingGates) > 0 &&
-				((known && !pr && (act.tvState() == "off" || blackingOut)) || inputNoted == InputAway) {
-				floor.observe(nearEnergy(f, c.nearGates), now)
+			if pr, known := pol.Present(); len(f.MovingGates) > 0 {
+				if e := nearEnergy(f, c.nearGates); floorTeaches(known, pr, act.tvState(), inputNoted, e, pol.EnergyMin) {
+					floor.observe(e, now)
+				}
 			}
 			if c.verbose {
 				log.Printf("frame: %s", f)
@@ -375,7 +375,6 @@ func main() {
 				act.fireHooks(want)
 				hookWant = want
 			}
-			blackingOut = pol.InBlackout(want, why, now)
 			want, why = pol.HoldBlack(want, why, now)
 			{
 				gated := gate != nil && (!gate.on.Load() || now.Sub(gateOpened) < c.stale)

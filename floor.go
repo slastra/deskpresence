@@ -14,12 +14,12 @@ import (
 // module swap (2026-09-19), a median of 20 and a 99.5th percentile of 41 by
 // 2026-09-27, when single noise frames over the fixed threshold of 38 kept
 // the verdict "present" all day. It learns only from frames the daemon is
-// confident are an empty room, the radar's own "away" with the TV off, or an
-// hour without keyboard or mouse (a radar stuck on "present" has no away
-// frames to learn from, so input is the second source). The threshold is the
-// 99.5th percentile of the last six hours of those frames plus a margin,
-// clamped: it can rise with the noise and fall back when the noise does, but
-// never below the configured minimum.
+// confident are an empty room, the radar's own "away" with the TV off (see
+// floorTeaches), or an hour without keyboard or mouse (a radar stuck on
+// "present" has no away frames to learn from, so input is the second
+// source). The threshold is the 99.5th percentile of the last six hours of
+// those frames plus a margin, clamped: it can rise with the noise and fall
+// back when the noise does, but never below the configured minimum.
 //
 // Six hours at the desk age every empty frame out, and with no opinion the
 // threshold fell back to the minimum: the morning after a long sit, room
@@ -45,6 +45,21 @@ func newFloorLearner(path string, min int) *floorLearner {
 		quantile: 0.995, margin: 4, min: min, max: 70, hist: map[int64]*[101]int{}}
 	f.load()
 	return f
+}
+
+// floorTeaches says whether a frame of near-gate energy e is an empty room
+// the learner may count. The radar's own away teaches only with the TV off
+// and under the live threshold: the blackout term let in arrival frames
+// while the TV waited lit, and with them a body's frames at 100, until the
+// 99.5th percentile sat at the 70 cap (2026-10-21). An hour without input
+// teaches whatever the radar says: it is how a radar stuck on "present"
+// learns its way out, and filtering it by the threshold would let the
+// learner only ever fall.
+func floorTeaches(known, present bool, tv string, in Input, e, energyMin int) bool {
+	if in == InputAway {
+		return true
+	}
+	return known && !present && tv == "off" && e < energyMin
 }
 
 // observe counts one near-gate energy reading from an empty room.
