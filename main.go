@@ -371,7 +371,7 @@ func main() {
 			if paused && !(hold.IsZero() && in == InputAway) {
 				want = ""
 			}
-			if h := hooks.next(want, why, pol.PresentSince(), pol.ConfirmedAt(), now, hookQuick, hookDwell); h != "" {
+			if h := hooks.next(want, why, pol.PresentSince(), pol.ConfirmedAt(), now, max(hookQuick, c.blackout), hookDwell); h != "" {
 				act.fireHooks(h)
 			}
 			want, why = pol.HoldBlack(want, why, now)
@@ -467,7 +467,9 @@ func (a *actuator) run(action string) {
 
 // hookQuick and hookDwell are the hook gate's: a radar return within
 // hookQuick of the hooks' last "off" fires once presence has been renewed
-// for hookDwell (see hookGate).
+// for hookDwell (see hookGate). The window stretches to -blackout when that
+// is longer: phantoms cluster in the minutes after leaving, while the TV
+// still waits behind its black screen, and the light shouldn't answer them.
 const hookQuick, hookDwell = 2 * time.Minute, 5 * time.Second
 
 // actuatorTimeout bounds one tv-screen.sh run.
