@@ -344,6 +344,13 @@ func main() {
 			// Media follows the debounced verdict, not the TV: pause the
 			// moment "away" latches, resume the moment "present" does.
 			if pr, known := pol.Present(); known {
+				// A departure leaves no raw line (raw edges are logged only
+				// while away), so name the last frame that renewed presence:
+				// left the room, or lost while sitting still?
+				if lastKnown && lastPresent && !pr {
+					c := pol.ConfirmedAt()
+					log.Printf("away: last confirmed %s, %s before the verdict", c.Format("15:04:05.0"), now.Sub(c).Round(100*time.Millisecond))
+				}
 				if lastKnown && pr != lastPresent && audioOn && !paused {
 					if pr {
 						media.resume()
