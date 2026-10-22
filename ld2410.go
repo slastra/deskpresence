@@ -43,7 +43,13 @@ func (f Frame) String() string {
 	if int(f.State) < len(names) {
 		n = names[f.State]
 	}
-	return fmt.Sprintf("%s mv=%dcm/%d st=%dcm/%d det=%dcm", n, f.MovingCM, f.MovingEn, f.StaticCM, f.StaticEn, f.DetectCM)
+	s := fmt.Sprintf("%s mv=%dcm/%d st=%dcm/%d det=%dcm", n, f.MovingCM, f.MovingEn, f.StaticCM, f.StaticEn, f.DetectCM)
+	// The summary is not what decides: engineering frames add the per-gate
+	// moving energies the gate rule reads, gate 0 first.
+	if len(f.MovingGates) > 0 {
+		s += fmt.Sprintf(" gates=%v", f.MovingGates)
+	}
+	return s
 }
 
 var (

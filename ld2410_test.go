@@ -53,3 +53,15 @@ func TestParserNeed(t *testing.T) {
 		t.Fatalf("realigned Need = %d, want %d", p.Need(), len(f))
 	}
 }
+
+// The log line carries the per-gate moving energies when the frame has
+// them, since the summary distance is not what decides.
+func TestFrameStringGates(t *testing.T) {
+	eng := Frame{Engineering: true, State: 1, MovingCM: 156, MovingEn: 100, MovingGates: []byte{62, 48, 12, 5, 0, 0, 0, 0, 0}}
+	if got, want := eng.String(), "moving mv=156cm/100 st=0cm/0 det=0cm gates=[62 48 12 5 0 0 0 0 0]"; got != want {
+		t.Fatalf("engineering frame:\n got %s\nwant %s", got, want)
+	}
+	if got := (Frame{State: 2, StaticCM: 90}).String(); got != "static mv=0cm/0 st=90cm/0 det=0cm" {
+		t.Fatalf("basic frame: got %s", got)
+	}
+}
