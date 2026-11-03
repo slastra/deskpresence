@@ -111,7 +111,12 @@ func main() {
 		runHold(os.Args[2:], filepath.Join(runtime, "deskpresence.hold"))
 		return
 	}
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version())
+		return
+	}
 	log.SetFlags(0)
 
 	pol := &Policy{
