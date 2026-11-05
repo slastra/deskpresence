@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -555,6 +556,10 @@ func setReadMin(f *os.File, n byte) error {
 	return ierr
 }
 
+// serialSilence is how long the sensor may send nothing before the port is
+// reopened (it streams ~10 frames a second).
+const serialSilence = 3 * time.Second
+
 func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 	var lastErr string
 	for ctx.Err() == nil {
@@ -602,8 +607,18 @@ func readSerial(ctx context.Context, c config, out chan<- Frame, h *hub) {
 		var p Parser
 		buf := make([]byte, 512)
 		for {
-			// An unplug hangs the tty up: EOF or EIO, never a silent block.
+			// An unplug hangs the tty up (EOF or EIO), but a stalled bulk
+			// endpoint does not: on 2026-11-04 a phone unplugged from the
+			// same hub left the CP2102's read URB stopped (-EPIPE) while the
+			// tty stayed open, and frames never came back. The sensor
+			// streams ~10 frames a second, so silence this long is a stall;
+			// reopening resubmits the URBs.
+			_ = rf.SetReadDeadline(time.Now().Add(serialSilence))
 			n, err := rf.Read(buf)
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				log.Printf("serial: no bytes for %s (reopening)", serialSilence)
+				break
+			}
 			if err != nil {
 				if ctx.Err() == nil {
 					log.Printf("serial: read: %v (reconnecting)", err)
