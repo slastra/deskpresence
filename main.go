@@ -43,6 +43,7 @@ type config struct {
 	nearGates, energyMin                           int
 	dryRun, verbose, noMpris, noAudioFade          bool
 	audioExclude                                   string
+	audioState                                     string
 	replay                                         string
 	sensor, alertText                              string
 }
@@ -85,6 +86,7 @@ func main() {
 	flag.StringVar(&c.httpAddr, "http", "127.0.0.1:7391", "serve the live sensor view here (empty = off)")
 	flag.BoolVar(&c.noAudioFade, "no-audio-fade", false, "do not fade PipeWire streams with the screen")
 	flag.StringVar(&c.audioExclude, "audio-exclude", "emotune,speech-dispatcher", "application.name substrings never faded")
+	flag.StringVar(&c.audioState, "audio-state", filepath.Join(home, ".local/state/deskpresence/audio-fade.json"), "the faded streams' originals while faded, so a crash mid-fade is undone on the next start")
 	flag.BoolVar(&c.noMpris, "no-mpris", false, "do not pause/resume media players on leave/return")
 	flag.StringVar(&c.replay, "replay", "", "synthesise frames instead of reading the port, e.g. present:5s,absent:70s,present:3s")
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -175,7 +177,8 @@ func main() {
 	}
 	var snd *audio
 	if !c.noAudioFade {
-		snd = newAudio(c.audioExclude)
+		snd = newAudio(c.audioExclude, c.audioState)
+		snd.restoreSaved()
 	}
 	var lastPresent, lastKnown bool
 	// The hooks follow the decision, not the TV: during a blackout the desk
